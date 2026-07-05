@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Switch, Image, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Switch, Image, ScrollView, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -8,6 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { X, Plus } from 'lucide-react-native';
 import { createExercise, updateExercise, fetchExercises } from '../database/api';
 import { getExerciseLibraryImage } from '../utils/imageMapper';
+import { showAlert } from '../utils/alert';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5001/api';
 // Uploaded images are served from the API host at /uploads, not under /api itself.
@@ -83,7 +84,7 @@ export default function ExerciseEditorScreen() {
 
   const handleSave = async () => {
     if (!name.trim()) {
-      Alert.alert('Validation Error', 'Exercise name is required');
+      showAlert('Validation Error', 'Exercise name is required');
       return;
     }
 
@@ -105,7 +106,7 @@ export default function ExerciseEditorScreen() {
       }
       router.back();
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Failed to save exercise');
+      showAlert('Error', e.message || 'Failed to save exercise');
     } finally {
       setSaving(false);
     }

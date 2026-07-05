@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, Image } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { login, register } from '../database/api';
 import { useTheme } from '../context/ThemeContext';
 import { Colors } from '../constants/Colors';
+import { showAlert } from '../utils/alert';
 
 export default function LoginScreen() {
   const [isLogin, setIsLogin] = useState(true);
@@ -23,7 +24,7 @@ export default function LoginScreen() {
         signIn(data.token, data.userId, data.username, data.isAdmin);
       }
     } catch (error: any) {
-      Alert.alert("Error", error.message);
+      showAlert("Error", error.message);
     }
   };
 

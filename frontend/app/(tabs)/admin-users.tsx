@@ -1,10 +1,11 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Switch } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Switch } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../constants/Colors';
 import { useAuth } from '../../context/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { fetchAdminUsers, updateUserAdmin, deleteUser } from '../../database/api';
+import { showAlert, confirmAction } from '../../utils/alert';
 import { Shield, Trash2, UserCheck, UserX } from 'lucide-react-native';
 
 export default function AdminUsersScreen() {
@@ -19,7 +20,7 @@ export default function AdminUsersScreen() {
       const data = await fetchAdminUsers();
       setUsers(data);
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      showAlert('Error', e.message);
     } finally {
       setLoading(false);
     }
@@ -32,29 +33,23 @@ export default function AdminUsersScreen() {
       await updateUserAdmin(user.id, !user.isAdmin);
       loadUsers();
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      showAlert('Error', e.message);
     }
   };
 
   const confirmDelete = (user: any) => {
-    Alert.alert(
+    confirmAction(
       'Delete User',
       `Are you sure you want to delete "${user.username}"? All their data will be removed.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteUser(user.id);
-              loadUsers();
-            } catch (e: any) {
-              Alert.alert('Error', e.message);
-            }
-          },
-        },
-      ]
+      'Delete',
+      async () => {
+        try {
+          await deleteUser(user.id);
+          loadUsers();
+        } catch (e: any) {
+          showAlert('Error', e.message);
+        }
+      }
     );
   };
 

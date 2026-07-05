@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, TouchableWithoutFeedback, ActivityIndicator, Image, Modal, Alert, BackHandler, Platform, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, TouchableWithoutFeedback, ActivityIndicator, Image, Modal, BackHandler, Platform, Switch } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -8,6 +8,7 @@ import { Colors } from '../constants/Colors';
 import { Plus, Save, Trash2, ArrowLeft, Dumbbell, ChevronUp, ChevronDown } from 'lucide-react-native';
 import { ExerciseImages } from '../assets/images';
 import { fetchTemplate, createTemplate, updateTemplate } from '../database/api';
+import { showAlert } from '../utils/alert';
 
 type TemplateExercise = {
   id: number | null;
@@ -97,7 +98,7 @@ export default function TemplateEditorScreen() {
       setExercises(normalized);
     } catch (err) {
       console.error(err);
-      Alert.alert('Error', 'Failed to load routine');
+      showAlert('Error', 'Failed to load routine');
     } finally {
       setLoading(false);
     }
@@ -219,7 +220,7 @@ export default function TemplateEditorScreen() {
 
   const saveTemplate = async () => {
     if (!name.trim()) {
-      alert('Please enter a template name');
+      showAlert('Validation Error', 'Please enter a template name');
       return;
     }
 
@@ -237,12 +238,12 @@ export default function TemplateEditorScreen() {
         await createTemplate(name, description, payload, isGlobal);
       }
 
-      alert('Template saved!');
+      showAlert('Success', 'Template saved!');
       setIsDirty(false);
       router.back();
     } catch (err) {
       console.error(err);
-      alert('Failed to save template');
+      showAlert('Error', 'Failed to save template');
     }
   };
 

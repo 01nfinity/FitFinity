@@ -7,6 +7,7 @@ import { Play, Copy, Plus, Dumbbell, Edit } from 'lucide-react-native';
 import { useTheme } from '../../context/ThemeContext';
 import { getExerciseGif } from '../../utils/imageMapper';
 import { fetchTemplates, createTemplate } from '../../database/api';
+import { showAlert } from '../../utils/alert';
 
 type TemplateExercise = { exerciseName: string; targetSets: number; targetReps: string; targetWeight: number };
 type Template = { id: number; name: string; description: string; isGlobal: boolean; exercises: TemplateExercise[] };
@@ -43,7 +44,7 @@ export default function TemplatesScreen() {
       weight: e.targetWeight,
     }));
     await createTemplate(newName, template.description, exercises, false);
-    alert(`Copied ${template.name}!`);
+    showAlert('Success', `Copied ${template.name}!`);
     loadTemplates();
   };
 

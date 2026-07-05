@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, TouchableWithoutFeedback, Image, Alert, Modal, BackHandler, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, TouchableWithoutFeedback, Image, Modal, BackHandler, Platform } from 'react-native';
 import { Calendar } from 'react-native-calendars';
 import { useTheme } from '../context/ThemeContext';
 import { getExerciseGif } from '../utils/imageMapper';
@@ -8,6 +8,7 @@ import { Plus, Save, Trash2, CheckCircle2, Circle, Dumbbell, ArrowLeft } from 'l
 import { useLocalSearchParams, router } from 'expo-router';
 import { ExerciseImages } from '../assets/images';
 import { fetchLog, createLog, updateLog, fetchTemplate } from '../database/api';
+import { showAlert } from '../utils/alert';
 
 type LogSet = { weight: string; reps: string; completed: boolean };
 type ExerciseEntry = { name: string; sets: LogSet[] };
@@ -208,7 +209,7 @@ export default function ActiveWorkoutScreen() {
       }
     } catch (err) {
       console.error('Failed to load workout log details:', err);
-      Alert.alert('Error', 'Failed to load workout details.');
+      showAlert('Error', 'Failed to load workout details.');
     }
   };
 
@@ -239,7 +240,7 @@ export default function ActiveWorkoutScreen() {
       }
     } catch (err) {
       console.error('Failed to load template details:', err);
-      Alert.alert('Error', 'Failed to load routine details.');
+      showAlert('Error', 'Failed to load routine details.');
     }
   };
 
@@ -298,12 +299,12 @@ export default function ActiveWorkoutScreen() {
     const timeRegex = /^\d{2}:\d{2}$/;
 
     if (!dateRegex.test(workoutDate.trim())) {
-      Alert.alert('Invalid Date', 'Please enter a valid date in YYYY-MM-DD format (e.g., 2026-05-16).');
+      showAlert('Invalid Date', 'Please enter a valid date in YYYY-MM-DD format (e.g., 2026-05-16).');
       return;
     }
 
     if (!timeRegex.test(workoutTime.trim())) {
-      Alert.alert('Invalid Time', 'Please enter a valid time in HH:MM format (24-hour, e.g., 14:30).');
+      showAlert('Invalid Time', 'Please enter a valid time in HH:MM format (24-hour, e.g., 14:30).');
       return;
     }
 
@@ -326,12 +327,12 @@ export default function ActiveWorkoutScreen() {
       } else {
         await createLog(combinedDateStr, workoutName, sentiment, setsPayload);
       }
-      Alert.alert('Success', logId ? 'Workout Updated!' : 'Workout Saved!');
+      showAlert('Success', logId ? 'Workout Updated!' : 'Workout Saved!');
       setIsDirty(false);
       router.replace('/(tabs)/log');
     } catch (err) {
       console.error(err);
-      Alert.alert('Error', logId ? 'Error updating workout' : 'Error saving workout');
+      showAlert('Error', logId ? 'Error updating workout' : 'Error saving workout');
     }
   };
 
