@@ -8,6 +8,26 @@ async function getHeaders() {
   return token ? { 'Authorization': `Bearer ${token}` } : {};
 }
 
+// Native's fetch polyfill accepts a plain {uri, type, name} object for file
+// uploads, but a real browser's FormData.append requires an actual Blob/File
+// -- a plain object just gets stringified to "[object Object]" and no image
+// data is ever sent. On web we fetch the picked asset's local uri (a blob:
+// or data: URL) back into a real Blob first.
+async function appendImageToFormData(formData: FormData, image: any) {
+  if (!image) return;
+  if (Platform.OS === 'web') {
+    const response = await fetch(image.uri);
+    const blob = await response.blob();
+    formData.append('image', blob, 'upload.jpg');
+  } else {
+    formData.append('image', {
+      uri: image.uri,
+      type: 'image/jpeg',
+      name: 'upload.jpg',
+    } as any);
+  }
+}
+
 export async function fetchExercises() {
   const headers = await getHeaders();
   const response = await fetch(`${API_BASE_URL}/exercises`, { headers });
@@ -22,14 +42,7 @@ export async function createExercise(data: { name: string, categories?: string[]
   if (data.description) formData.append('description', data.description);
   if (data.isGlobal !== undefined) formData.append('isGlobal', data.isGlobal.toString());
   formData.append('imageUrl', data.imageUrl || '');
-
-  if (data.image) {
-    formData.append('image', {
-      uri: data.image.uri,
-      type: 'image/jpeg',
-      name: 'upload.jpg',
-    } as any);
-  }
+  await appendImageToFormData(formData, data.image);
 
   const token = Platform.OS === 'web' ? localStorage.getItem('userToken') : await SecureStore.getItemAsync('userToken');
   const response = await fetch(`${API_BASE_URL}/exercises`, {
@@ -51,14 +64,7 @@ export async function updateExercise(id: number, data: { name: string, categorie
   if (data.description) formData.append('description', data.description);
   if (data.isGlobal !== undefined) formData.append('isGlobal', data.isGlobal.toString());
   formData.append('imageUrl', data.imageUrl || '');
-
-  if (data.image) {
-    formData.append('image', {
-      uri: data.image.uri,
-      type: 'image/jpeg',
-      name: 'upload.jpg',
-    } as any);
-  }
+  await appendImageToFormData(formData, data.image);
 
   const token = Platform.OS === 'web' ? localStorage.getItem('userToken') : await SecureStore.getItemAsync('userToken');
   const response = await fetch(`${API_BASE_URL}/exercises/${id}`, {

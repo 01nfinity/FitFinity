@@ -69,16 +69,20 @@ export default function ExerciseEditorScreen() {
   );
 
   const pickImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'], // Updated enum replacement
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.8,
-    });
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'], // Updated enum replacement
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
 
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      setImage(result.assets[0]);
-      setImageUrl('');
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setImage(result.assets[0]);
+        setImageUrl('');
+      }
+    } catch (e: any) {
+      showAlert('Error', e.message || 'Failed to pick an image');
     }
   };
 
