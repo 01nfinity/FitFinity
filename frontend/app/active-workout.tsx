@@ -2,22 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, TouchableWithoutFeedback, Image, Modal, BackHandler, Platform } from 'react-native';
 import { Calendar } from 'react-native-calendars';
 import { useTheme } from '../context/ThemeContext';
-import { getExerciseGif } from '../utils/imageMapper';
+import { resolveExerciseImageSource } from '../utils/imageMapper';
 import { Colors } from '../constants/Colors';
-import { Plus, Save, Trash2, CheckCircle2, Circle, Dumbbell, ArrowLeft } from 'lucide-react-native';
+import { Plus, Save, Trash2, CheckCircle2, Circle, Dumbbell, ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { useLocalSearchParams, router } from 'expo-router';
-import { ExerciseImages } from '../assets/images';
-import { fetchLog, createLog, updateLog, fetchTemplate } from '../database/api';
+import { fetchLog, createLog, updateLog, fetchTemplate, fetchExercises } from '../database/api';
 import { showAlert } from '../utils/alert';
 
 type LogSet = { weight: string; reps: string; completed: boolean };
 type ExerciseEntry = { name: string; sets: LogSet[] };
-
-const AVAILABLE_EXERCISES = Object.keys(ExerciseImages).map((key, idx) => ({
-  id: idx,
-  name: key.replace(/-/g, ' ').replace('.gif', '').replace('.webp', ''),
-  image_url: key,
-}));
+type LibraryExercise = { id: number; name: string; imageUrl: string | null };
 
 const SENTIMENTS = [
   { emoji: '😭', label: 'Not Well', value: 1 },
@@ -112,6 +106,19 @@ export default function ActiveWorkoutScreen() {
   const [showExerciseSelector, setShowExerciseSelector] = useState(false);
   const [selectorTargetIndex, setSelectorTargetIndex] = useState<number | null>(null);
   const [exerciseSearchQuery, setExerciseSearchQuery] = useState('');
+  const [libraryExercises, setLibraryExercises] = useState<LibraryExercise[]>([]);
+
+  useEffect(() => {
+    fetchExercises()
+      .then((data: any[]) => {
+        const sorted = [...data].sort((a, b) => a.name.localeCompare(b.name));
+        setLibraryExercises(sorted.map(e => ({ id: e.id, name: e.name, imageUrl: e.imageUrl || null })));
+      })
+      .catch(() => {});
+  }, []);
+
+  const findLibraryImageUrl = (name: string) =>
+    libraryExercises.find(e => e.name.toLowerCase() === name.toLowerCase())?.imageUrl || null;
 
   // Reactive Calculations
   const totalCompletedWeight = exercises.reduce((acc, ex) => {
@@ -322,12 +329,17 @@ export default function ActiveWorkoutScreen() {
     );
 
     try {
+      let result;
       if (logId) {
-        await updateLog(Number(logId), combinedDateStr, workoutName, sentiment, setsPayload);
+        result = await updateLog(Number(logId), combinedDateStr, workoutName, sentiment, setsPayload);
       } else {
-        await createLog(combinedDateStr, workoutName, sentiment, setsPayload);
+        result = await createLog(combinedDateStr, workoutName, sentiment, setsPayload);
       }
-      showAlert('Success', logId ? 'Workout Updated!' : 'Workout Saved!');
+      if (result?._pendingSync) {
+        showAlert('Saved Offline', 'No connection right now -- this workout is saved on your device and will sync automatically once you\'re back online.');
+      } else {
+        showAlert('Success', logId ? 'Workout Updated!' : 'Workout Saved!');
+      }
       setIsDirty(false);
       router.replace('/(tabs)/log');
     } catch (err) {
@@ -379,12 +391,14 @@ export default function ActiveWorkoutScreen() {
           </View>
         </View>
 
-        {exercises.map((exercise, exIndex) => (
+        {exercises.map((exercise, exIndex) => {
+          const imgSource = resolveExerciseImageSource(exercise.name, findLibraryImageUrl(exercise.name));
+          return (
           <View key={exIndex} style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <View style={styles.exHeader}>
               <View style={styles.gifContainer}>
-                {getExerciseGif(exercise.name) ? (
-                  <Image source={getExerciseGif(exercise.name)} style={styles.gifImage} />
+                {imgSource ? (
+                  <Image source={imgSource} style={styles.gifImage} />
                 ) : (
                   <Dumbbell color={theme.tabIconDefault} size={24} />
                 )}
@@ -410,7 +424,7 @@ export default function ActiveWorkoutScreen() {
               <Text style={[styles.setLabel, { color: theme.text, flex: 1 }]}>Set</Text>
               <Text style={[styles.setLabel, { color: theme.text, flex: 2 }]}>lbs</Text>
               <Text style={[styles.setLabel, { color: theme.text, flex: 2 }]}>Reps</Text>
-              <Text style={[styles.setLabel, { color: theme.text, width: 30, textAlign: 'center' }]}>✓</Text>
+              <Text style={[styles.setLabel, { color: theme.text, width: 44, textAlign: 'center' }]}>✓</Text>
             </View>
 
             {exercise.sets.map((set, setIndex) => (
@@ -432,8 +446,12 @@ export default function ActiveWorkoutScreen() {
                   value={set.reps}
                   onChangeText={(val) => updateSet(exIndex, setIndex, 'reps', val)}
                 />
-                <TouchableOpacity onPress={() => updateSet(exIndex, setIndex, 'completed', !set.completed)} style={{ width: 30, alignItems: 'center' }}>
-                  {set.completed ? <CheckCircle2 color={theme.tint} size={24} /> : <Circle color={theme.border} size={24} />}
+                <TouchableOpacity
+                  onPress={() => updateSet(exIndex, setIndex, 'completed', !set.completed)}
+                  style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  {set.completed ? <CheckCircle2 color={theme.tint} size={32} /> : <Circle color={theme.border} size={32} />}
                 </TouchableOpacity>
               </View>
             ))}
@@ -443,7 +461,8 @@ export default function ActiveWorkoutScreen() {
               <Text style={[styles.addText, { color: theme.tint }]}>Add Set</Text>
             </TouchableOpacity>
           </View>
-        ))}
+          );
+        })}
 
         <TouchableOpacity style={[styles.addExButton, { borderColor: theme.text }]} onPress={triggerAddExerciseSelector}>
           <Plus color={theme.text} size={20} />
@@ -516,6 +535,9 @@ export default function ActiveWorkoutScreen() {
                 </TouchableOpacity>
               </View>
               <Calendar
+                // Forces a remount on theme change -- see app/(tabs)/calendar.tsx
+                // for why react-native-calendars needs this.
+                key={isDark ? 'dark' : 'light'}
                 current={workoutDate}
                 onDayPress={(day: any) => {
                   setWorkoutDate(day.dateString);
@@ -524,6 +546,11 @@ export default function ActiveWorkoutScreen() {
                 markedDates={{
                   [workoutDate]: { selected: true, selectedColor: theme.tint }
                 }}
+                renderArrow={(direction: 'left' | 'right') =>
+                  direction === 'left'
+                    ? <ChevronLeft color={theme.text} size={28} />
+                    : <ChevronRight color={theme.text} size={28} />
+                }
                 theme={{
                   calendarBackground: theme.surface,
                   textSectionTitleColor: theme.tabIconDefault,
@@ -532,9 +559,12 @@ export default function ActiveWorkoutScreen() {
                   todayTextColor: theme.tint,
                   dayTextColor: theme.text,
                   textDisabledColor: theme.tabIconDefault,
+                  // See app/(tabs)/calendar.tsx for why this key (not
+                  // textDisabledColor) is what actually controls adjacent-month days.
+                  textInactiveColor: theme.tabIconDefault,
                   dotColor: theme.tint,
                   selectedDotColor: '#ffffff',
-                  arrowColor: theme.tint,
+                  arrowColor: theme.text,
                   monthTextColor: theme.text,
                   indicatorColor: theme.tint,
                 }}
@@ -684,20 +714,29 @@ export default function ActiveWorkoutScreen() {
               />
 
               <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1, marginTop: 10 }}>
-                {AVAILABLE_EXERCISES.filter(ex =>
+                {libraryExercises.filter(ex =>
                   ex.name.toLowerCase().includes(exerciseSearchQuery.toLowerCase())
-                ).map(ex => (
-                  <TouchableOpacity
-                    key={ex.id}
-                    style={[styles.exerciseRow, { borderBottomColor: theme.border }]}
-                    onPress={() => handleSelectExerciseName(ex.name)}
-                  >
-                    <Image source={ExerciseImages[ex.image_url]} style={styles.exerciseRowImage} />
-                    <Text style={[styles.exerciseRowText, { color: theme.text }]}>
-                      {ex.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                ).map(ex => {
+                  const source = resolveExerciseImageSource(ex.name, ex.imageUrl);
+                  return (
+                    <TouchableOpacity
+                      key={ex.id}
+                      style={[styles.exerciseRow, { borderBottomColor: theme.border }]}
+                      onPress={() => handleSelectExerciseName(ex.name)}
+                    >
+                      {source ? (
+                        <Image source={source} style={styles.exerciseRowImage} />
+                      ) : (
+                        <View style={[styles.exerciseRowImage, { justifyContent: 'center', alignItems: 'center' }]}>
+                          <Dumbbell color={theme.tabIconDefault} size={20} />
+                        </View>
+                      )}
+                      <Text style={[styles.exerciseRowText, { color: theme.text }]}>
+                        {ex.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
             </View>
           </TouchableWithoutFeedback>

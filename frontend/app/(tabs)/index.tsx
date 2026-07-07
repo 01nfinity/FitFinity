@@ -3,13 +3,15 @@ import { View, Text, StyleSheet, ScrollView, Dimensions, ActivityIndicator } fro
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../constants/Colors';
 import { LineChart, BarChart } from 'react-native-gifted-charts';
-// import { useSQLiteContext } from 'expo-sqlite';
 import { useIsFocused } from '@react-navigation/native';
+import { fetchLogs } from '../../database/api';
+
+type LogSet = { exerciseName: string; weight: number | null; reps: number | null; completed: boolean };
+type Log = { id: number; date: string; templateName: string | null; sentiment: string | null; sets: LogSet[] };
 
 export default function DashboardScreen() {
   const { isDark } = useTheme();
   const theme = isDark ? Colors.dark : Colors.light;
-  const db: any = { getAllAsync: async () => [], runAsync: async () => {}, getFirstAsync: async () => null, execAsync: async () => {} };
   const isFocused = useIsFocused();
 
   const screenWidth = Dimensions.get('window').width - 64;
@@ -27,96 +29,89 @@ export default function DashboardScreen() {
 
   const loadStats = async () => {
     try {
+      const logs: Log[] = await fetchLogs();
+
+      // "Last 30 days" cutoff, compared as YYYY-MM-DD strings (mirrors the
+      // old SQLite `date('now', '-30 days')` comparison).
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      const cutoffStr = cutoff.toISOString().split('T')[0];
+
+      const dailyTotals: Record<string, { reps: number; weight: number }> = {};
+      let lifetimeReps = 0;
+      let lifetimeWeight = 0;
+
+      logs.forEach(log => {
+        const datePart = log.date.split(' ')[0];
+        (log.sets || []).forEach(s => {
+          if (!s.completed) return;
+          lifetimeReps += s.reps || 0;
+          lifetimeWeight += s.weight || 0;
+          if (datePart >= cutoffStr) {
+            if (!dailyTotals[datePart]) dailyTotals[datePart] = { reps: 0, weight: 0 };
+            dailyTotals[datePart].reps += s.reps || 0;
+            dailyTotals[datePart].weight += s.weight || 0;
+          }
+        });
+      });
+
+      const sortedDates = Object.keys(dailyTotals).sort();
+
       // 1. Reps Data (30 Days)
-      const repsRows = await db.getAllAsync<{ date: string; total: number }>(`
-        SELECT substr(date, 1, 10) as date, SUM(reps) as total 
-        FROM logs 
-        JOIN log_sets ON logs.id = log_sets.log_id 
-        WHERE substr(date, 1, 10) >= date('now', '-30 days') 
-          AND log_sets.completed = 1
-        GROUP BY substr(date, 1, 10) 
-        ORDER BY date ASC
-      `);
-      
-      let maxReps = 0;
-      if (repsRows.length > 0) {
-        maxReps = Math.max(...repsRows.map(r => r.total));
+      if (sortedDates.length > 0) {
+        const maxReps = Math.max(...sortedDates.map(d => dailyTotals[d].reps));
         setRepsMax(Math.max(10, Math.ceil(maxReps * 1.35)));
-        setRepsData(repsRows.map(r => ({ 
-          value: r.total, 
-          label: r.date.split(' ')[0].split('-').slice(1).join('/'),
-          dataPointText: r.total.toString() 
+        setRepsData(sortedDates.map(d => ({
+          value: dailyTotals[d].reps,
+          label: d.split('-').slice(1).join('/'),
+          dataPointText: dailyTotals[d].reps.toString(),
         })));
       } else {
         setRepsMax(10);
-        setRepsData([{value: 0, label: 'No Data'}]);
+        setRepsData([{ value: 0, label: 'No Data' }]);
       }
 
       // 2. Weight Data (30 Days)
-      const weightRows = await db.getAllAsync<{ date: string; total: number }>(`
-        SELECT substr(date, 1, 10) as date, SUM(weight) as total 
-        FROM logs 
-        JOIN log_sets ON logs.id = log_sets.log_id 
-        WHERE substr(date, 1, 10) >= date('now', '-30 days') 
-          AND log_sets.completed = 1
-        GROUP BY substr(date, 1, 10) 
-        ORDER BY date ASC
-      `);
-      
-      let maxWeight = 0;
-      if (weightRows.length > 0) {
-        maxWeight = Math.max(...weightRows.map(r => r.total));
+      if (sortedDates.length > 0) {
+        const maxWeight = Math.max(...sortedDates.map(d => dailyTotals[d].weight));
         setWeightMax(Math.max(100, Math.ceil(maxWeight * 1.35)));
-        setWeightData(weightRows.map(r => ({ 
-          value: r.total, 
-          label: r.date.split(' ')[0].split('-').slice(1).join('/'),
-          dataPointText: r.total >= 1000 ? (r.total / 1000).toFixed(1) + 'k' : r.total.toString()
+        setWeightData(sortedDates.map(d => ({
+          value: dailyTotals[d].weight,
+          label: d.split('-').slice(1).join('/'),
+          dataPointText: dailyTotals[d].weight >= 1000 ? (dailyTotals[d].weight / 1000).toFixed(1) + 'k' : dailyTotals[d].weight.toString(),
         })));
       } else {
         setWeightMax(100);
-        setWeightData([{value: 0, label: 'No Data'}]);
+        setWeightData([{ value: 0, label: 'No Data' }]);
       }
 
       // 3. Sentiment Data (Last 5 unique workouts)
-      const feelRows = await db.getAllAsync<{ template_name: string; sentiment: string }>(`
-        SELECT template_name, sentiment 
-        FROM logs 
-        WHERE sentiment IS NOT NULL
-        ORDER BY date DESC, id DESC 
-        LIMIT 5
-      `);
-      
-      if (feelRows.length > 0) {
+      const withSentiment = logs
+        .filter(l => l.sentiment != null)
+        .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : b.id - a.id))
+        .slice(0, 5);
+
+      if (withSentiment.length > 0) {
         const sentimentEmojis: Record<string, string> = { '1': '😭', '2': '🙁', '3': '😐', '4': '🙂', '5': '😆' };
-        setSentimentData(feelRows.reverse().map((r, idx) => ({
-          value: parseInt(r.sentiment),
-          label: r.template_name.split(' ')[0], // First word of routine
+        setSentimentData(withSentiment.reverse().map((l, idx) => ({
+          value: parseInt(l.sentiment as string),
+          label: (l.templateName || 'Custom').split(' ')[0], // First word of routine
           frontColor: idx % 2 === 0 ? theme.tint : theme.accent,
           topLabelComponent: () => (
             <Text style={{ color: theme.text, fontSize: 16, marginBottom: 4 }}>
-              {sentimentEmojis[r.sentiment] || ''}
+              {sentimentEmojis[l.sentiment as string] || ''}
             </Text>
           ),
           showValuesAsTopLabel: true,
         })));
       } else {
-        setSentimentData([{value: 0, label: 'N/A'}]);
+        setSentimentData([{ value: 0, label: 'N/A' }]);
       }
 
       // 4. Lifetime Stats
-      const repsTotalRow = await db.getFirstAsync<{ total: number | null }>(`
-        SELECT SUM(reps) as total FROM log_sets WHERE completed = 1
-      `);
-      const weightTotalRow = await db.getFirstAsync<{ total: number | null }>(`
-        SELECT SUM(weight) as total FROM log_sets WHERE completed = 1
-      `);
-      const workoutsTotalRow = await db.getFirstAsync<{ total: number | null }>(`
-        SELECT COUNT(*) as total FROM logs
-      `);
-
-      setTotalRepsSum(repsTotalRow?.total || 0);
-      setTotalWeightSum(weightTotalRow?.total || 0);
-      setTotalWorkoutsSum(workoutsTotalRow?.total || 0);
+      setTotalRepsSum(lifetimeReps);
+      setTotalWeightSum(lifetimeWeight);
+      setTotalWorkoutsSum(logs.length);
 
       setRefreshKey(prev => prev + 1);
 

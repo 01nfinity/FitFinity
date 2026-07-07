@@ -1,5 +1,9 @@
 import { ExerciseImages } from '../assets/images';
 
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5001/api';
+// Uploaded images are served from the API host at /uploads, not under /api itself.
+const MEDIA_BASE_URL = API_BASE_URL.replace(/\/api\/?$/, '');
+
 // Maps the seeded Exercise Library names (backend/prisma/seed-exercises.js) to
 // the closest available bundled asset. Only exercises with a reasonable visual
 // match are listed here; the rest fall back to the "No Image" placeholder.
@@ -89,4 +93,15 @@ export function getExerciseGif(exerciseName: string) {
   }
 
   return null;
+}
+
+// Resolves the best available <Image source> for an exercise: an explicit
+// imageUrl from the Exercise Library (uploaded file or pasted URL) takes
+// priority, then a bundled workout gif/webp, then a bundled library photo,
+// otherwise null (caller should render a placeholder, e.g. a Dumbbell icon).
+export function resolveExerciseImageSource(name: string, imageUrl?: string | null) {
+  if (imageUrl) {
+    return { uri: imageUrl.startsWith('http') ? imageUrl : `${MEDIA_BASE_URL}${imageUrl}` };
+  }
+  return getExerciseGif(name) || getExerciseLibraryImage(name) || null;
 }

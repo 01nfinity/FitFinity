@@ -1,21 +1,24 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Tabs } from 'expo-router';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../constants/Colors';
-import { LayoutDashboard, Dumbbell, CalendarDays, Library, ClipboardList, Sun, Moon, LogOut, Shield } from 'lucide-react-native';
+import { LayoutDashboard, Dumbbell, CalendarDays, Library, ClipboardList, Sun, Moon, LogOut, Shield, KeyRound } from 'lucide-react-native';
 import { TouchableOpacity, View, Image } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
+import ChangePasswordModal from '../../components/ChangePasswordModal';
 
 export default function TabLayout() {
   const { isDark, setMode } = useTheme();
   const theme = isDark ? Colors.dark : Colors.light;
-  const { signOut, isAdmin } = useAuth();
+  const { signOut, isAdmin, userId } = useAuth();
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   const toggleTheme = () => {
     setMode(isDark ? 'light' : 'dark');
   };
 
   return (
+    <>
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: theme.tint,
@@ -44,6 +47,9 @@ export default function TabLayout() {
         ),
         headerRight: () => (
           <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 15, gap: 16 }}>
+            <TouchableOpacity onPress={() => setShowPasswordModal(true)}>
+              <KeyRound color={theme.tint} size={24} />
+            </TouchableOpacity>
             <TouchableOpacity onPress={toggleTheme}>
               {isDark ? <Sun color={theme.tint} size={24} /> : <Moon color={theme.tint} size={24} />}
             </TouchableOpacity>
@@ -98,5 +104,13 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+    {userId != null && (
+      <ChangePasswordModal
+        visible={showPasswordModal}
+        onClose={() => setShowPasswordModal(false)}
+        targetUserId={userId}
+      />
+    )}
+    </>
   );
 }

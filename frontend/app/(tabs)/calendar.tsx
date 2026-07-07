@@ -3,94 +3,44 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from 'react-nat
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../constants/Colors';
 import { Calendar } from 'react-native-calendars';
-// import { useSQLiteContext } from 'expo-sqlite';
 import { useIsFocused } from '@react-navigation/native';
-import { Dumbbell } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight } from 'lucide-react-native';
+import { fetchLogs } from '../../database/api';
 
-type SetRow = {
+type LogSet = { exerciseName: string; weight: number | null; reps: number | null; completed: boolean };
+
+type Log = {
   id: number;
-  exercise_name: string;
-  weight: number;
-  reps: number;
-  completed: number;
+  date: string;
+  templateName: string | null;
+  sentiment: string | null;
+  sets: LogSet[];
 };
 
 type WorkoutLog = {
   id: number;
   date: string;
-  template_name: string;
+  template_name: string | null;
   sentiment: string | null;
-  exercises?: Record<string, { weight: number; reps: number; completed: boolean }[]>;
+  exercises: Record<string, { weight: number; reps: number; completed: boolean }[]>;
 };
 
 export default function CalendarScreen() {
   const { isDark } = useTheme();
   const theme = isDark ? Colors.dark : Colors.light;
-  const db: any = { getAllAsync: async () => [], runAsync: async () => {}, getFirstAsync: async () => null, execAsync: async () => {} };
   const isFocused = useIsFocused();
 
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-  const [markedDates, setMarkedDates] = useState<Record<string, any>>({});
-  const [dayWorkouts, setDayWorkouts] = useState<WorkoutLog[]>([]);
+  const [allLogs, setAllLogs] = useState<Log[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Load all unique dates where workouts were performed
-  const loadMarkedDates = async () => {
-    try {
-      const dates = await db.getAllAsync<{ date: string }>('SELECT DISTINCT date FROM logs');
-      const marks: Record<string, any> = {};
-      
-      dates.forEach(d => {
-        const datePart = d.date.split(' ')[0];
-        marks[datePart] = { marked: true, dotColor: theme.accent };
-      });
-
-      // Add selected styling
-      if (selectedDate) {
-        marks[selectedDate] = {
-          ...marks[selectedDate],
-          selected: true,
-          selectedColor: theme.tint,
-        };
-      }
-      
-      setMarkedDates(marks);
-    } catch (err) {
-      console.error('Failed to load marked calendar dates:', err);
-    }
-  };
-
-  // Load exercises logged for the selected date
-  const loadDayWorkouts = async (date: string) => {
+  const loadLogs = async () => {
     setLoading(true);
     try {
-      const logs = await db.getAllAsync<WorkoutLog>('SELECT * FROM logs WHERE substr(date, 1, 10) = ?', date);
-      
-      const enrichedLogs = await Promise.all(logs.map(async (log) => {
-        const sets = await db.getAllAsync<SetRow>(
-          'SELECT * FROM log_sets WHERE log_id = ? ORDER BY id ASC', 
-          log.id
-        );
-        
-        // Group sets by exercise name
-        const exercises: Record<string, { weight: number; reps: number; completed: boolean }[]> = {};
-        sets.forEach(s => {
-          if (!exercises[s.exercise_name]) {
-            exercises[s.exercise_name] = [];
-          }
-          exercises[s.exercise_name].push({
-            weight: s.weight,
-            reps: s.reps,
-            completed: s.completed === 1,
-          });
-        });
-
-        return { ...log, exercises };
-      }));
-
-      setDayWorkouts(enrichedLogs);
+      const logs: Log[] = await fetchLogs();
+      setAllLogs(logs);
     } catch (err) {
-      console.error('Failed to load workouts for day:', err);
+      console.error('Failed to load workout history:', err);
     } finally {
       setLoading(false);
     }
@@ -98,10 +48,39 @@ export default function CalendarScreen() {
 
   useEffect(() => {
     if (isFocused) {
-      loadMarkedDates();
-      loadDayWorkouts(selectedDate);
+      loadLogs();
     }
-  }, [isFocused, selectedDate]);
+  }, [isFocused]);
+
+  // Dates with a logged workout, marked with a dot; the selected day's
+  // highlight is merged in on every render so tapping a day doesn't need a refetch.
+  const markedDates: Record<string, any> = {};
+  allLogs.forEach(log => {
+    const datePart = log.date.split(' ')[0];
+    markedDates[datePart] = { marked: true, dotColor: theme.accent };
+  });
+  markedDates[selectedDate] = {
+    ...markedDates[selectedDate],
+    selected: true,
+    selectedColor: theme.tint,
+  };
+
+  const dayWorkouts: WorkoutLog[] = allLogs
+    .filter(log => log.date.split(' ')[0] === selectedDate)
+    .map(log => {
+      const exercises: Record<string, { weight: number; reps: number; completed: boolean }[]> = {};
+      (log.sets || []).forEach(s => {
+        if (!exercises[s.exerciseName]) {
+          exercises[s.exerciseName] = [];
+        }
+        exercises[s.exerciseName].push({
+          weight: s.weight || 0,
+          reps: s.reps || 0,
+          completed: !!s.completed,
+        });
+      });
+      return { id: log.id, date: log.date, template_name: log.templateName, sentiment: log.sentiment, exercises };
+    });
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: theme.background }]} showsVerticalScrollIndicator={false}>
@@ -109,9 +88,20 @@ export default function CalendarScreen() {
 
       <View style={[styles.calendarContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
         <Calendar
+          // react-native-calendars derives its internal stylesheet from the
+          // theme prop once and doesn't fully re-derive all of it on a plain
+          // prop update -- forcing a remount on theme change is the reliable
+          // fix (this is also why navigating away and back "fixes" it: that
+          // remounts the component too).
+          key={isDark ? 'dark' : 'light'}
           current={selectedDate}
           onDayPress={(day: any) => setSelectedDate(day.dateString)}
           markedDates={markedDates}
+          renderArrow={(direction: 'left' | 'right') =>
+            direction === 'left'
+              ? <ChevronLeft color={theme.text} size={28} />
+              : <ChevronRight color={theme.text} size={28} />
+          }
           theme={{
             calendarBackground: 'transparent',
             textSectionTitleColor: theme.tabIconDefault,
@@ -120,9 +110,15 @@ export default function CalendarScreen() {
             todayTextColor: theme.tint,
             dayTextColor: theme.text,
             textDisabledColor: theme.border,
+            // react-native-calendars uses a *separate* key for the leading/trailing
+            // days from adjacent months (as opposed to genuinely disabled dates,
+            // which this app never has any of) -- this was never set, so it silently
+            // fell back to the library's hardcoded default (#d9e1e8), which has
+            // ~1.2:1 contrast against the light-mode surface (essentially invisible).
+            textInactiveColor: theme.tabIconDefault,
             dotColor: theme.accent,
             selectedDotColor: '#ffffff',
-            arrowColor: theme.tint,
+            arrowColor: theme.text,
             monthTextColor: theme.text,
             textDayFontWeight: '500',
             textMonthFontWeight: 'bold',
@@ -144,7 +140,7 @@ export default function CalendarScreen() {
           dayWorkouts.map((workout, idx) => (
             <View key={workout.id} style={[styles.workoutCard, idx < dayWorkouts.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.border }]}>
               <Text style={[styles.workoutName, { color: theme.text }]}>
-                {workout.template_name}
+                {workout.template_name || 'Custom Workout'}
               </Text>
               
               {(() => {

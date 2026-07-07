@@ -1,13 +1,13 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Image, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Image, ActivityIndicator, TextInput } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { router } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { Play, Copy, Plus, Dumbbell, Edit } from 'lucide-react-native';
+import { Play, Copy, Plus, Dumbbell, Edit, Trash2 } from 'lucide-react-native';
 import { useTheme } from '../../context/ThemeContext';
-import { getExerciseGif } from '../../utils/imageMapper';
-import { fetchTemplates, createTemplate } from '../../database/api';
-import { showAlert } from '../../utils/alert';
+import { resolveExerciseImageSource } from '../../utils/imageMapper';
+import { fetchTemplates, createTemplate, deleteTemplate, fetchExercises } from '../../database/api';
+import { showAlert, confirmAction } from '../../utils/alert';
 
 type TemplateExercise = { exerciseName: string; targetSets: number; targetReps: string; targetWeight: number };
 type Template = { id: number; name: string; description: string; isGlobal: boolean; exercises: TemplateExercise[] };
@@ -17,11 +17,16 @@ export default function TemplatesScreen() {
   const theme = isDark ? Colors.dark : Colors.light;
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [libraryImages, setLibraryImages] = useState<Record<string, string | null>>({});
 
   const loadTemplates = async () => {
     try {
-      const data = await fetchTemplates();
-      setTemplates(data);
+      const [templatesData, exercisesData] = await Promise.all([fetchTemplates(), fetchExercises()]);
+      setTemplates(templatesData);
+      const map: Record<string, string | null> = {};
+      (exercisesData || []).forEach((e: any) => { map[e.name.toLowerCase()] = e.imageUrl || null; });
+      setLibraryImages(map);
     } catch (e) {
       console.error(e);
     } finally {
@@ -48,9 +53,33 @@ export default function TemplatesScreen() {
     loadTemplates();
   };
 
+  const removeTemplate = (template: Template) => {
+    confirmAction(
+      'Delete Routine',
+      `Are you sure you want to delete "${template.name}"? This cannot be undone.`,
+      'Delete',
+      async () => {
+        try {
+          await deleteTemplate(template.id);
+          loadTemplates();
+        } catch (e: any) {
+          showAlert('Error', e.message || 'Failed to delete routine');
+        }
+      }
+    );
+  };
+
   const createNewTemplate = () => {
     router.push('/template-editor');
   };
+
+  const filteredTemplates = templates.filter(item => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return true;
+    if (item.name.toLowerCase().includes(query)) return true;
+    if (item.description && item.description.toLowerCase().includes(query)) return true;
+    return (item.exercises || []).some(e => e.exerciseName.toLowerCase().includes(query));
+  });
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -62,11 +91,21 @@ export default function TemplatesScreen() {
         </TouchableOpacity>
       </View>
 
+      <TextInput
+        style={[styles.searchInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.surface }]}
+        placeholder="Search routines or exercises..."
+        placeholderTextColor={theme.tabIconDefault}
+        value={searchQuery}
+        onChangeText={setSearchQuery}
+      />
+
       {loading ? (
         <ActivityIndicator size="large" color={theme.tint} style={{ marginTop: 50 }} />
+      ) : filteredTemplates.length === 0 ? (
+        <Text style={[styles.emptyText, { color: theme.tabIconDefault }]}>No routines found.</Text>
       ) : (
         <FlatList
-          data={templates}
+          data={filteredTemplates}
           keyExtractor={item => item.id.toString()}
           showsVerticalScrollIndicator={false}
           renderItem={({ item }) => (
@@ -88,6 +127,9 @@ export default function TemplatesScreen() {
                   <TouchableOpacity style={styles.actionBtn} onPress={() => copyTemplate(item)}>
                     <Copy color={theme.tabIconDefault} size={20} />
                   </TouchableOpacity>
+                  <TouchableOpacity style={styles.actionBtn} onPress={() => removeTemplate(item)}>
+                    <Trash2 color="#EF4444" size={20} />
+                  </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.playBtn, { backgroundColor: theme.tint }]}
                     onPress={() => router.push({ pathname: '/active-workout', params: { templateId: item.id } })}
@@ -101,7 +143,7 @@ export default function TemplatesScreen() {
               {item.exercises && item.exercises.length > 0 && (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.gifScroll}>
                   {item.exercises.map((ex, index) => {
-                    const source = getExerciseGif(ex.exerciseName);
+                    const source = resolveExerciseImageSource(ex.exerciseName, libraryImages[ex.exerciseName.toLowerCase()] ?? null);
                     return (
                       <View key={index} style={[styles.gifContainer, { backgroundColor: theme.border }]}>
                         {source ? (
@@ -128,6 +170,8 @@ const styles = StyleSheet.create({
   title: { fontSize: 28, fontWeight: '800' },
   newBtn: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, alignItems: 'center' },
   newBtnText: { color: '#fff', fontWeight: 'bold', marginLeft: 4 },
+  searchInput: { borderWidth: 1, borderRadius: 12, padding: 12, fontSize: 16, marginBottom: 16 },
+  emptyText: { textAlign: 'center', fontSize: 15, marginTop: 40 },
   card: { padding: 16, borderRadius: 16, borderWidth: 1, marginBottom: 12 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   name: { fontSize: 18, fontWeight: 'bold' },

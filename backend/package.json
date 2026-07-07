@@ -9,7 +9,7 @@
     "build": "tsc",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
-    "seed": "node prisma/seed.js && node prisma/seed-exercises.js",
+    "seed": "node prisma/seed.js && node prisma/seed-exercises.js && node prisma/seed-appsheet-templates.js",
     "promote-admin": "node prisma/promote-admin.js"
   },
   "dependencies": {

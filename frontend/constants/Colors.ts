@@ -8,7 +8,7 @@ export const Colors = {
     tabIconSelected: '#00A6FB',
     surface: '#F5F5F5',
     border: '#E0E0E0',
-    accent: '#00FF41',
+    accent: '#15803D',
     onTint: '#FFFFFF',
   },
   dark: {

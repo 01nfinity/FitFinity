@@ -6,7 +6,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { fetchAdminUsers, updateUserAdmin, deleteUser } from '../../database/api';
 import { showAlert, confirmAction } from '../../utils/alert';
-import { Shield, Trash2, UserCheck, UserX } from 'lucide-react-native';
+import { Shield, Trash2, UserCheck, UserX, KeyRound } from 'lucide-react-native';
+import ChangePasswordModal from '../../components/ChangePasswordModal';
 
 export default function AdminUsersScreen() {
   const { isDark } = useTheme();
@@ -14,6 +15,7 @@ export default function AdminUsersScreen() {
   const { userId: currentUserId, isAdmin } = useAuth();
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [passwordTarget, setPasswordTarget] = useState<{ id: number; username: string } | null>(null);
 
   const loadUsers = async () => {
     try {
@@ -110,6 +112,12 @@ export default function AdminUsersScreen() {
                     trackColor={{ false: theme.border, true: '#F59E0B' }}
                   />
                 </View>
+                <TouchableOpacity
+                  style={[styles.deleteButton, { backgroundColor: theme.tint + '22' }]}
+                  onPress={() => setPasswordTarget({ id: item.id, username: item.username })}
+                >
+                  <KeyRound size={18} color={theme.tint} />
+                </TouchableOpacity>
                 {item.id !== currentUserId && (
                   <TouchableOpacity
                     style={[styles.deleteButton, { backgroundColor: '#EF444422' }]}
@@ -121,6 +129,15 @@ export default function AdminUsersScreen() {
               </View>
             </View>
           )}
+        />
+      )}
+
+      {passwordTarget && (
+        <ChangePasswordModal
+          visible={passwordTarget !== null}
+          onClose={() => setPasswordTarget(null)}
+          targetUserId={passwordTarget.id}
+          targetUsername={passwordTarget.username}
         />
       )}
     </View>

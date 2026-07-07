@@ -120,6 +120,28 @@ app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req: 
   res.json({ success: true });
 });
 
+// Not admin-gated by middleware: any authenticated user may reset their own
+// password; only admins may reset someone else's.
+app.put('/api/users/:id/password', authenticateToken, async (req: any, res) => {
+  const { id } = req.params;
+  const { newPassword } = req.body;
+  const targetId = parseInt(id);
+
+  if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+
+  const isSelf = req.user.userId === targetId;
+  if (!isSelf && !req.user.isAdmin) return res.status(403).json({ error: 'Unauthorized' });
+
+  const existing = await prisma.user.findUnique({ where: { id: targetId } });
+  if (!existing) return res.status(404).json({ error: 'User not found' });
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  await prisma.user.update({ where: { id: targetId }, data: { passwordHash } });
+  res.json({ success: true });
+});
+
 // --- EXERCISES ---
 app.get('/api/exercises', authenticateToken, async (req: any, res) => {
   const exercises = await prisma.exercise.findMany({
@@ -293,6 +315,20 @@ app.put('/api/templates/:id', authenticateToken, async (req: any, res) => {
     include: { exercises: true }
   });
   res.json(template);
+});
+
+app.delete('/api/templates/:id', authenticateToken, async (req: any, res) => {
+  const { id } = req.params;
+
+  const existing = await prisma.template.findUnique({ where: { id: parseInt(id) } });
+  if (!existing) return res.status(404).json({ error: 'Template not found' });
+
+  const isOwner = existing.userId === req.user.userId;
+  const canManageGlobal = existing.isGlobal && req.user.isAdmin;
+  if (!isOwner && !canManageGlobal) return res.status(403).json({ error: 'Unauthorized' });
+
+  await prisma.template.delete({ where: { id: parseInt(id) } });
+  res.json({ success: true });
 });
 
 // --- LOGS ---

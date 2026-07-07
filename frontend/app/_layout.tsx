@@ -1,9 +1,11 @@
+import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { LogBox, Platform } from 'react-native';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
 import { Colors } from '../constants/Colors';
 import { StatusBar } from 'expo-status-bar';
+import { startOfflineSync, syncNow } from '../database/api';
 
 LogBox.ignoreLogs(['Unknown event handler property']);
 if (Platform.OS === 'web') {
@@ -35,6 +37,14 @@ import { AuthProvider } from '../context/AuthContext';
 function LayoutInner() {
   const { isDark } = useTheme();
   const theme = isDark ? Colors.dark : Colors.light;
+
+  useEffect(() => {
+    // Catches reconnects that happen while the app is open...
+    const unsubscribe = startOfflineSync();
+    // ...and a queue left over from being closed while offline.
+    syncNow().catch(() => {});
+    return unsubscribe;
+  }, []);
 
   return (
     <AuthProvider>

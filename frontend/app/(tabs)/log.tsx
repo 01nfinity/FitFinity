@@ -4,8 +4,8 @@ import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../constants/Colors';
 import { useIsFocused } from '@react-navigation/native';
 import { router } from 'expo-router';
-import { Plus, Dumbbell, Trash2 } from 'lucide-react-native';
-import { fetchLogs, deleteLog } from '../../database/api';
+import { Plus, Dumbbell, Trash2, CloudOff, RefreshCw } from 'lucide-react-native';
+import { fetchLogs, deleteLog, getPendingSyncCount, subscribeSyncStatus, syncNow } from '../../database/api';
 
 type WorkoutHistoryRow = {
   id: number;
@@ -15,6 +15,7 @@ type WorkoutHistoryRow = {
   total_sets: number;
   total_weight: number | null;
   exercises: string;
+  pendingSync: boolean;
 };
 
 const SENTIMENTS: Record<string, string> = {
@@ -33,6 +34,8 @@ export default function HistoryTableScreen() {
   const [history, setHistory] = useState<WorkoutHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [syncing, setSyncing] = useState(false);
 
   const loadHistory = async () => {
     try {
@@ -48,6 +51,7 @@ export default function HistoryTableScreen() {
           total_sets: (l.sets || []).length,
           total_weight: completedSets.reduce((sum: number, s: any) => sum + (s.weight || 0), 0),
           exercises: exerciseNames.join(','),
+          pendingSync: !!l._pendingSync,
         };
       });
       setHistory(rows);
@@ -62,11 +66,30 @@ export default function HistoryTableScreen() {
     setDeleteTarget({ id, name });
   };
 
+  const handleSyncNow = async () => {
+    setSyncing(true);
+    try {
+      await syncNow();
+      loadHistory();
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   useEffect(() => {
     if (isFocused) {
       loadHistory();
+      getPendingSyncCount().then(setPendingCount);
     }
   }, [isFocused]);
+
+  useEffect(() => {
+    getPendingSyncCount().then(setPendingCount);
+    return subscribeSyncStatus(() => {
+      getPendingSyncCount().then(setPendingCount);
+      loadHistory();
+    });
+  }, []);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -80,6 +103,27 @@ export default function HistoryTableScreen() {
           <Text style={[styles.newBtnText, { color: theme.onTint }]}>New Workout</Text>
         </TouchableOpacity>
       </View>
+
+      {pendingCount > 0 && (
+        <TouchableOpacity
+          style={[styles.syncBanner, { backgroundColor: theme.surface, borderColor: theme.border }]}
+          onPress={handleSyncNow}
+          disabled={syncing}
+        >
+          <CloudOff color={theme.tabIconDefault} size={16} />
+          <Text style={[styles.syncBannerText, { color: theme.tabIconDefault }]}>
+            {pendingCount} workout{pendingCount === 1 ? '' : 's'} saved offline, not yet synced
+          </Text>
+          {syncing ? (
+            <ActivityIndicator size="small" color={theme.tint} />
+          ) : (
+            <View style={styles.syncNowRow}>
+              <RefreshCw color={theme.tint} size={14} />
+              <Text style={[styles.syncNowText, { color: theme.tint }]}>Sync Now</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      )}
 
       {loading ? (
         <ActivityIndicator size="large" color={theme.tint} style={{ marginTop: 40 }} />
@@ -118,9 +162,12 @@ export default function HistoryTableScreen() {
                   activeOpacity={0.7}
                 >
                   <Text style={[styles.cell, { color: theme.text, width: 90 }]}>{row.date.split(' ')[0]}</Text>
-                  <Text style={[styles.cell, { color: theme.text, width: 130, fontWeight: 'bold' }]}>
-                    {row.template_name}
-                  </Text>
+                  <View style={{ width: 130, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Text style={[styles.cell, { color: theme.text, fontWeight: 'bold' }]} numberOfLines={1}>
+                      {row.template_name}
+                    </Text>
+                    {row.pendingSync && <CloudOff color={theme.tabIconDefault} size={12} />}
+                  </View>
                   <Text 
                     style={[styles.cell, { color: theme.tabIconDefault, width: 200 }]}
                     numberOfLines={1}
@@ -204,6 +251,18 @@ const styles = StyleSheet.create({
   title: { fontSize: 28, fontWeight: '800' },
   newBtn: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, alignItems: 'center' },
   newBtnText: { color: '#fff', fontWeight: 'bold', marginLeft: 4 },
+  syncBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  syncBannerText: { flex: 1, fontSize: 12, fontWeight: '600' },
+  syncNowRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  syncNowText: { fontSize: 12, fontWeight: '700' },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 80 },
   emptyText: { fontSize: 16, marginTop: 16, marginBottom: 24 },
   startBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },

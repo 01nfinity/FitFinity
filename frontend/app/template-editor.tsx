@@ -3,11 +3,10 @@ import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Toucha
 import { useLocalSearchParams, router } from 'expo-router';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { getExerciseGif } from '../utils/imageMapper';
+import { resolveExerciseImageSource } from '../utils/imageMapper';
 import { Colors } from '../constants/Colors';
 import { Plus, Save, Trash2, ArrowLeft, Dumbbell, ChevronUp, ChevronDown } from 'lucide-react-native';
-import { ExerciseImages } from '../assets/images';
-import { fetchTemplate, createTemplate, updateTemplate } from '../database/api';
+import { fetchTemplate, createTemplate, updateTemplate, fetchExercises } from '../database/api';
 import { showAlert } from '../utils/alert';
 
 type TemplateExercise = {
@@ -18,11 +17,7 @@ type TemplateExercise = {
   target_weight: string;
 };
 
-const AVAILABLE_EXERCISES = Object.keys(ExerciseImages).map((key, idx) => ({
-  id: idx,
-  name: key.replace(/-/g, ' ').replace('.gif', '').replace('.webp', ''),
-  image_url: key,
-}));
+type LibraryExercise = { id: number; name: string; imageUrl: string | null };
 
 export default function TemplateEditorScreen() {
   const { id } = useLocalSearchParams();
@@ -40,9 +35,22 @@ export default function TemplateEditorScreen() {
   const [showExerciseSelector, setShowExerciseSelector] = useState(false);
   const [selectorTargetIndex, setSelectorTargetIndex] = useState<number | null>(null);
   const [exerciseSearchQuery, setExerciseSearchQuery] = useState('');
+  const [libraryExercises, setLibraryExercises] = useState<LibraryExercise[]>([]);
 
   const [isDirty, setIsDirty] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+
+  useEffect(() => {
+    fetchExercises()
+      .then((data: any[]) => {
+        const sorted = [...data].sort((a, b) => a.name.localeCompare(b.name));
+        setLibraryExercises(sorted.map(e => ({ id: e.id, name: e.name, imageUrl: e.imageUrl || null })));
+      })
+      .catch(() => {});
+  }, []);
+
+  const findLibraryImageUrl = (name: string) =>
+    libraryExercises.find(e => e.name.toLowerCase() === name.toLowerCase())?.imageUrl || null;
 
   const handleBackPress = () => {
     if (isDirty) {
@@ -146,9 +154,18 @@ export default function TemplateEditorScreen() {
     setExercises(newEx);
   };
 
-  const getRepList = (targetReps: string) => {
-    if (!targetReps) return ['10'];
-    return targetReps.split(',').map(r => r.trim());
+  // Both lists are padded/truncated to exactly setsCount so the number of
+  // rows rendered always matches target_sets -- the single source of truth
+  // for "how many sets" also used by active-workout.tsx. Previously reps
+  // wasn't padded to setsCount, so a single-value reps string (e.g. "15")
+  // rendered only 1 row no matter what target_sets said, and clicking "Add
+  // Set" to compensate silently drove target_sets past the intended count.
+  const getRepList = (targetReps: string, setsCount: number) => {
+    const list = targetReps ? targetReps.split(',').map(r => r.trim()) : ['10'];
+    while (list.length < setsCount) {
+      list.push(list[list.length - 1] || '10');
+    }
+    return list.slice(0, setsCount);
   };
 
   const getWeightList = (targetWeight: any, setsCount: number) => {
@@ -164,7 +181,7 @@ export default function TemplateEditorScreen() {
   const updateSetRepValue = (exerciseIndex: number, setIndex: number, value: string) => {
     setIsDirty(true);
     const newEx = [...exercises];
-    const repList = getRepList(newEx[exerciseIndex].target_reps);
+    const repList = getRepList(newEx[exerciseIndex].target_reps, newEx[exerciseIndex].target_sets);
     repList[setIndex] = value.replace(/[^0-9]/g, '');
     newEx[exerciseIndex].target_reps = repList.join(', ');
     setExercises(newEx);
@@ -182,39 +199,28 @@ export default function TemplateEditorScreen() {
   const addSetToExercise = (exerciseIndex: number) => {
     setIsDirty(true);
     const newEx = [...exercises];
-    newEx[exerciseIndex].target_sets += 1;
-
-    // Reps
-    const repList = getRepList(newEx[exerciseIndex].target_reps);
-    const lastVal = repList[repList.length - 1] || '10';
-    repList.push(lastVal);
-    newEx[exerciseIndex].target_reps = repList.join(', ');
-
-    // Weight
-    const weightList = getWeightList(newEx[exerciseIndex].target_weight, newEx[exerciseIndex].target_sets - 1);
-    const lastWeight = weightList[weightList.length - 1] || '0';
-    weightList.push(lastWeight);
-    newEx[exerciseIndex].target_weight = weightList.join(', ');
-
+    const newSetsCount = newEx[exerciseIndex].target_sets + 1;
+    newEx[exerciseIndex].target_reps = getRepList(newEx[exerciseIndex].target_reps, newSetsCount).join(', ');
+    newEx[exerciseIndex].target_weight = getWeightList(newEx[exerciseIndex].target_weight, newSetsCount).join(', ');
+    newEx[exerciseIndex].target_sets = newSetsCount;
     setExercises(newEx);
   };
 
   const removeSetFromExercise = (exerciseIndex: number, setIndex: number) => {
     setIsDirty(true);
     const newEx = [...exercises];
-    if (newEx[exerciseIndex].target_sets <= 1) return;
-    newEx[exerciseIndex].target_sets -= 1;
+    const oldSetsCount = newEx[exerciseIndex].target_sets;
+    if (oldSetsCount <= 1) return;
 
-    // Reps
-    const repList = getRepList(newEx[exerciseIndex].target_reps);
+    const repList = getRepList(newEx[exerciseIndex].target_reps, oldSetsCount);
     repList.splice(setIndex, 1);
     newEx[exerciseIndex].target_reps = repList.join(', ');
 
-    // Weight
-    const weightList = getWeightList(newEx[exerciseIndex].target_weight, newEx[exerciseIndex].target_sets + 1);
+    const weightList = getWeightList(newEx[exerciseIndex].target_weight, oldSetsCount);
     weightList.splice(setIndex, 1);
     newEx[exerciseIndex].target_weight = weightList.join(', ');
 
+    newEx[exerciseIndex].target_sets = oldSetsCount - 1;
     setExercises(newEx);
   };
 
@@ -302,7 +308,9 @@ export default function TemplateEditorScreen() {
           </TouchableOpacity>
         </View>
 
-        {exercises.map((ex, index) => (
+        {exercises.map((ex, index) => {
+          const imgSource = resolveExerciseImageSource(ex.exercise_name, findLibraryImageUrl(ex.exercise_name));
+          return (
           <View key={index} style={[styles.exCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <View style={styles.exCardHeader}>
               <View style={styles.reorderColumn}>
@@ -322,8 +330,8 @@ export default function TemplateEditorScreen() {
                 </TouchableOpacity>
               </View>
               <View style={styles.gifContainer}>
-                {getExerciseGif(ex.exercise_name) ? (
-                  <Image source={getExerciseGif(ex.exercise_name)} style={styles.gifImage} />
+                {imgSource ? (
+                  <Image source={imgSource} style={styles.gifImage} />
                 ) : (
                   <Dumbbell color={theme.tabIconDefault} size={24} />
                 )}
@@ -352,7 +360,7 @@ export default function TemplateEditorScreen() {
               <Text style={[styles.setLabel, { color: theme.text, width: 30 }]}></Text>
             </View>
 
-            {getRepList(ex.target_reps).map((repsValue, setIndex) => {
+            {getRepList(ex.target_reps, ex.target_sets).map((repsValue, setIndex) => {
               const weightList = getWeightList(ex.target_weight, ex.target_sets);
               const weightValue = weightList[setIndex] || '0';
               return (
@@ -401,7 +409,8 @@ export default function TemplateEditorScreen() {
               <Text style={[styles.addText, { color: theme.tint }]}>Add Set</Text>
             </TouchableOpacity>
           </View>
-        ))}
+          );
+        })}
 
         <TouchableOpacity style={[styles.saveBtn, { backgroundColor: theme.tint }]} onPress={saveTemplate}>
           <Save color={theme.onTint} size={20} />
@@ -444,20 +453,29 @@ export default function TemplateEditorScreen() {
               />
 
               <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1, marginTop: 10 }}>
-                {AVAILABLE_EXERCISES.filter(ex =>
+                {libraryExercises.filter(ex =>
                   ex.name.toLowerCase().includes(exerciseSearchQuery.toLowerCase())
-                ).map(ex => (
-                  <TouchableOpacity
-                    key={ex.id}
-                    style={[styles.exerciseRow, { borderBottomColor: theme.border }]}
-                    onPress={() => handleSelectExerciseName(ex.name)}
-                  >
-                    <Image source={ExerciseImages[ex.image_url]} style={styles.exerciseRowImage} />
-                    <Text style={[styles.exerciseRowText, { color: theme.text }]}>
-                      {ex.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                ).map(ex => {
+                  const source = resolveExerciseImageSource(ex.name, ex.imageUrl);
+                  return (
+                    <TouchableOpacity
+                      key={ex.id}
+                      style={[styles.exerciseRow, { borderBottomColor: theme.border }]}
+                      onPress={() => handleSelectExerciseName(ex.name)}
+                    >
+                      {source ? (
+                        <Image source={source} style={styles.exerciseRowImage} />
+                      ) : (
+                        <View style={[styles.exerciseRowImage, { justifyContent: 'center', alignItems: 'center' }]}>
+                          <Dumbbell color={theme.tabIconDefault} size={20} />
+                        </View>
+                      )}
+                      <Text style={[styles.exerciseRowText, { color: theme.text }]}>
+                        {ex.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
             </View>
           </TouchableWithoutFeedback>

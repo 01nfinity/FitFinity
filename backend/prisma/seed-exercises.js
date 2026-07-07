@@ -34,6 +34,8 @@ const globalExercises = [
   { name: 'Plank', categories: ['Core'], description: 'Hold a push-up position on your forearms. Keep your body in a straight line from head to heels. Engage your core, glutes, and legs. Do not let hips sag or rise.' },
   { name: 'Crunches', categories: ['Core'], description: 'Lie on your back with knees bent. Place hands behind your head. Curl your upper body toward your knees using your abs. Lower slowly. Do not pull on your neck.' },
   { name: 'Russian Twists', categories: ['Core'], description: 'Sit with knees bent, lean back slightly with back straight. Hold a weight and rotate your torso side to side, touching the weight to the floor on each side. Keep core tight.' },
+  // Cardio
+  { name: 'Rucking', categories: ['Cardio'], description: 'Walk briskly outdoors or on a treadmill while wearing a weighted rucksack (typically 45-55 lb). Keep a tall, upright posture and a steady pace. Builds cardiovascular endurance plus grip, postural, and lower-body strength with low joint impact.' },
 ];
 
 async function main() {
