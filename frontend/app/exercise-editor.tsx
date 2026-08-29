@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Switch, Image, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Switch, ScrollView, ActivityIndicator } from 'react-native';
+import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -200,11 +201,11 @@ export default function ExerciseEditorScreen() {
         onPress={pickImage}
       >
         {image ? (
-          <Image source={{ uri: image.uri }} style={styles.previewImage} resizeMode="contain" />
+          <Image source={{ uri: image.uri }} style={styles.previewImage} contentFit="contain" />
         ) : existingImagePreviewUri ? (
-          <Image source={{ uri: existingImagePreviewUri }} style={styles.previewImage} resizeMode="contain" />
+          <Image source={{ uri: existingImagePreviewUri }} style={styles.previewImage} contentFit="contain" />
         ) : getExerciseLibraryImage(name) ? (
-          <Image source={getExerciseLibraryImage(name)} style={styles.previewImage} resizeMode="contain" />
+          <Image source={getExerciseLibraryImage(name)} style={styles.previewImage} contentFit="contain" />
         ) : (
           <Text style={{ color: theme.text }}>Tap to upload an image</Text>
         )}

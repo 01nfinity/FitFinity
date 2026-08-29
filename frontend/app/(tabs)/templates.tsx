@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Image, ActivityIndicator, TextInput, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, RefreshControl } from 'react-native';
+import { Image } from 'expo-image';
 import { Colors } from '../../constants/Colors';
 import { router } from 'expo-router';
 import { Play, Copy, Plus, Dumbbell, Edit, Trash2, CloudOff } from 'lucide-react-native';
@@ -184,7 +185,7 @@ export default function TemplatesScreen() {
                     return (
                       <View key={index} style={[styles.gifContainer, { backgroundColor: theme.border }]}>
                         {source ? (
-                          <Image source={source} style={styles.gifImage} />
+                          <Image source={source} style={styles.gifImage} contentFit="cover" />
                         ) : (
                           <Dumbbell color={theme.tabIconDefault} size={24} />
                         )}
@@ -220,5 +221,5 @@ const styles = StyleSheet.create({
   badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12, fontSize: 10, fontWeight: 'bold', overflow: 'hidden' },
   gifScroll: { marginTop: 12 },
   gifContainer: { width: 80, height: 80, borderRadius: 12, overflow: 'hidden', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  gifImage: { width: '100%', height: '100%', resizeMode: 'cover' }
+  gifImage: { width: '100%', height: '100%' }
 });

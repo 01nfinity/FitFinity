@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, TouchableWithoutFeedback, ActivityIndicator, Image, Modal, BackHandler, Platform, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, TouchableWithoutFeedback, ActivityIndicator, Modal, BackHandler, Platform, Switch } from 'react-native';
+import { Image } from 'expo-image';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -331,7 +332,7 @@ export default function TemplateEditorScreen() {
               </View>
               <View style={styles.gifContainer}>
                 {imgSource ? (
-                  <Image source={imgSource} style={styles.gifImage} />
+                  <Image source={imgSource} style={styles.gifImage} contentFit="cover" />
                 ) : (
                   <Dumbbell color={theme.tabIconDefault} size={24} />
                 )}
@@ -464,7 +465,7 @@ export default function TemplateEditorScreen() {
                       onPress={() => handleSelectExerciseName(ex.name)}
                     >
                       {source ? (
-                        <Image source={source} style={styles.exerciseRowImage} />
+                        <Image source={source} style={styles.exerciseRowImage} contentFit="cover" />
                       ) : (
                         <View style={[styles.exerciseRowImage, { justifyContent: 'center', alignItems: 'center' }]}>
                           <Dumbbell color={theme.tabIconDefault} size={20} />
@@ -551,7 +552,7 @@ const styles = StyleSheet.create({
   exCardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   reorderColumn: { justifyContent: 'center', alignItems: 'center', marginRight: 8, gap: 2 },
   gifContainer: { width: 60, height: 60, borderRadius: 10, overflow: 'hidden', backgroundColor: '#333', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  gifImage: { width: '100%', height: '100%', resizeMode: 'cover' },
+  gifImage: { width: '100%', height: '100%' },
   exNameInput: { fontSize: 16, fontWeight: 'bold', flex: 1, marginRight: 10 },
   row: { flexDirection: 'row', justifyContent: 'space-between' },
   col: { flex: 1, marginRight: 8 },

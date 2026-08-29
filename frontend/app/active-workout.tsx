@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, TouchableWithoutFeedback, Image, Modal, BackHandler, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, TouchableWithoutFeedback, Modal, BackHandler, Platform } from 'react-native';
+import { Image } from 'expo-image';
 import { Calendar } from 'react-native-calendars';
 import { useTheme } from '../context/ThemeContext';
 import { resolveExerciseImageSource } from '../utils/imageMapper';
@@ -398,7 +399,7 @@ export default function ActiveWorkoutScreen() {
             <View style={styles.exHeader}>
               <View style={styles.gifContainer}>
                 {imgSource ? (
-                  <Image source={imgSource} style={styles.gifImage} />
+                  <Image source={imgSource} style={styles.gifImage} contentFit="cover" />
                 ) : (
                   <Dumbbell color={theme.tabIconDefault} size={24} />
                 )}
@@ -725,7 +726,7 @@ export default function ActiveWorkoutScreen() {
                       onPress={() => handleSelectExerciseName(ex.name)}
                     >
                       {source ? (
-                        <Image source={source} style={styles.exerciseRowImage} />
+                        <Image source={source} style={styles.exerciseRowImage} contentFit="cover" />
                       ) : (
                         <View style={[styles.exerciseRowImage, { justifyContent: 'center', alignItems: 'center' }]}>
                           <Dumbbell color={theme.tabIconDefault} size={20} />
@@ -824,7 +825,7 @@ const styles = StyleSheet.create({
   card: { padding: 16, borderRadius: 16, borderWidth: 1, marginBottom: 16 },
   exHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   gifContainer: { width: 80, height: 80, borderRadius: 12, overflow: 'hidden', backgroundColor: '#333', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
-  gifImage: { width: '100%', height: '100%', resizeMode: 'cover' },
+  gifImage: { width: '100%', height: '100%' },
   exNameInput: { fontSize: 18, fontWeight: 'bold', flex: 1, marginRight: 10 },
   setHeader: { flexDirection: 'row', marginBottom: 8, paddingHorizontal: 8 },
   setLabel: { fontSize: 14, fontWeight: 'bold' },

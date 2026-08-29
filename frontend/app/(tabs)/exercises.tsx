@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Image, TextInput, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
+import { Image } from 'expo-image';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../constants/Colors';
 import { fetchExercises, getPendingSyncCount, subscribeSyncStatus, syncNow, getIsOffline } from '../../database/api';
@@ -115,7 +116,7 @@ export default function ExercisesScreen() {
                   <Image
                     source={{ uri: resolveMediaUrl(item.imageUrl) }}
                     style={styles.image}
-                    resizeMode="contain"
+                    contentFit="contain"
                   />
                 </View>
               ) : getExerciseLibraryImage(item.name) ? (
@@ -123,7 +124,7 @@ export default function ExercisesScreen() {
                   <Image
                     source={getExerciseLibraryImage(item.name)}
                     style={styles.image}
-                    resizeMode="contain"
+                    contentFit="contain"
                   />
                 </View>
               ) : (

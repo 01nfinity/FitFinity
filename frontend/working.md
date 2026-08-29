@@ -379,6 +379,28 @@ those only store the exercise name as a string (see §4 caveat on no FK to
 `Exercise`) and are matched back to a library entry by case-insensitive name
 at render time, not by a stored reference.
 
+**All exercise/template image rendering uses `expo-image`, not the plain
+`react-native` `Image` component** — switched 2026-08-29 after confirming
+GIF/WebP/AVIF images (both user-uploaded and the bundled AppSheet cable-gif
+assets) rendered fine on web but as a blank box on Android, even after
+fixing the Content-Type-mismatch bug above. Root cause: vanilla React
+Native's Android image pipeline doesn't reliably decode GIF/WebP/AVIF
+without extra native configuration Expo doesn't wire in by default for the
+plain `Image` component. `expo-image` (already present as a transitive
+dependency; formalized in `package.json`) uses a native pipeline with solid
+built-in support for all of those formats and is Expo's own recommended
+component. API differences from `react-native`'s `Image` handled at each
+call site: `contentFit="cover"/"contain"` prop instead of `resizeMode`
+(as either a prop or, in a couple of spots, a `StyleSheet` property — moved
+out of the style object, since `expo-image` doesn't accept it there). Only
+`login.tsx`'s and `(tabs)/_layout.tsx`'s static PNG logo/icon `<Image>`s
+were left on `react-native`'s `Image` — PNG has never had this problem, and
+those aren't served through any of the code paths above. **This is a native
+module, unlike everything else in this fix** — it requires a fresh EAS
+Android build to actually take effect on-device (the web deploy alone was
+not sufficient); pure-JS changes don't need this, but adding/changing a
+native dependency always does.
+
 ## 11. Key User Flows
 
 - **Auth**: `login.tsx` toggles between login/register, both hitting the same form; success calls `AuthContext.signIn`, which persists the token and lets the route-guard effect push into `(tabs)/`.
