@@ -243,6 +243,21 @@ sense for a browser tab vs. a phone in a gym with bad signal. Reads
 (the caching described below) are unaffected and still fall back to cache on
 web too — that part carries no data-loss risk.
 
+That fix alone wasn't sufficient the first time it shipped: it stopped *new*
+web writes from queuing but didn't clean up whatever was already queued from
+before — including the exact broken image upload above, which could never
+sync (dead `blob:` URL) yet kept rendering successfully in that one browser
+tab via the pending-merge preview (`getMergedExercises`), while the real
+server value stayed `null` the whole time. This produced a genuinely
+confusing state: the web app kept "showing" the image (a local-only
+illusion) while every other client correctly showed nothing, and the
+still-stuck entry silently blocked anything queued behind it. Fixed by
+`discardStaleWebQueue()` (`database/api.ts`, backed by
+`offlineSync.clearQueue()`), called once from `app/_layout.tsx` on web
+startup in place of `startOfflineSync()`/`syncNow()` — unconditionally
+empties the queue on every web load, since nothing queued there can ever be
+trusted post-fix. Native's queue/sync-on-reconnect behavior is untouched.
+
 - **Read-through caching** — `fetchExercises`, `fetchTemplates`, and
   `fetchLogs` in `database/api.ts` each try the network first; on success
   they cache the response (`offline_cache_exercises`/`_templates`/`_logs`)

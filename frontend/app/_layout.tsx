@@ -5,7 +5,7 @@ import { LogBox, Platform } from 'react-native';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
 import { Colors } from '../constants/Colors';
 import { StatusBar } from 'expo-status-bar';
-import { startOfflineSync, syncNow } from '../database/api';
+import { startOfflineSync, syncNow, discardStaleWebQueue } from '../database/api';
 
 LogBox.ignoreLogs(['Unknown event handler property']);
 if (Platform.OS === 'web') {
@@ -39,6 +39,14 @@ function LayoutInner() {
   const theme = isDark ? Colors.dark : Colors.light;
 
   useEffect(() => {
+    if (Platform.OS === 'web') {
+      // Web never queues new writes (see database/api.ts) -- discard
+      // anything queued before that fix shipped, so a stale entry (e.g. a
+      // dead image blob: URL) doesn't sit forever misleadingly "previewing"
+      // in this tab while silently blocking anything queued behind it.
+      discardStaleWebQueue().catch(() => {});
+      return;
+    }
     // Catches reconnects that happen while the app is open...
     const unsubscribe = startOfflineSync();
     // ...and a queue left over from being closed while offline.

@@ -125,6 +125,16 @@ export async function getPendingCount(): Promise<number> {
   return (await getQueue()).length;
 }
 
+// Discards every queued write with no attempt to sync them. Used on web
+// startup (see database/api.ts's canQueueWritesOffline) to clear out
+// anything queued before writes stopped being queued there -- those entries
+// can never legitimately sync (e.g. an image pick's blob: URL doesn't
+// survive a page reload) and, left in place, the oldest one fails every
+// replay attempt forever and silently blocks everything queued behind it.
+export async function clearQueue(): Promise<void> {
+  await setQueue([]);
+}
+
 // Merges the last-known server logs with the pending queue so the Log tab
 // and Calendar/Stats screens see locally-created/edited/deleted entries
 // immediately, without waiting for a sync.

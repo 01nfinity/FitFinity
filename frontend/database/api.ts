@@ -403,6 +403,17 @@ export async function getPendingSyncCount() {
   return offlineSync.getPendingCount();
 }
 
+// One-time cleanup for web: discards any writes queued before web stopped
+// queuing writes at all (see canQueueWritesOffline above). Those entries can
+// never legitimately sync and would otherwise sit forever, showing a
+// misleading local-only preview (e.g. a dead image blob: URL rendering fine
+// in the one browser tab that created it) while blocking anything else
+// queued behind them. Call once at startup on web; a no-op elsewhere.
+export async function discardStaleWebQueue() {
+  if (Platform.OS !== 'web') return;
+  return offlineSync.clearQueue();
+}
+
 // Whether the most recent read fell back to cached data because the network
 // was unreachable -- lets screens show "you're offline" even with nothing
 // queued to sync.
