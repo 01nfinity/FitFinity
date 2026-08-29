@@ -19,6 +19,26 @@ const JWT_SECRET = process.env.JWT_SECRET;
 app.use(cors());
 app.use(express.json());
 
+// Maps a real MIME type to a matching file extension so an uploaded file is
+// stored (and later served by express.static, which derives Content-Type
+// from the extension) under an extension that actually reflects its bytes.
+// The client used to always name every upload "upload.jpg" regardless of
+// the picked file's real format -- a genuinely-WebP photo would get served
+// as Content-Type: image/jpeg. Browsers render it anyway by sniffing real
+// content, but Android's native image decoder trusts the declared type and
+// silently fails to render it. Derive the extension here, from multer's own
+// mimetype (the multipart part's real declared Content-Type), rather than
+// trusting the client-supplied filename at all.
+const MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+};
+
 // Setup Multer for image uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -29,7 +49,8 @@ const storage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
+    const ext = MIME_TO_EXT[file.mimetype] || path.extname(file.originalname).slice(1) || 'jpg';
+    cb(null, `${Date.now()}-upload.${ext}`);
   },
 });
 const upload = multer({ storage });

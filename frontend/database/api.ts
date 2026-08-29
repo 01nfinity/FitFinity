@@ -30,6 +30,20 @@ function isNetworkError(err: any): boolean {
 // instead of queuing -- matches the pre-offline-sync behavior there.
 const canQueueWritesOffline = Platform.OS !== 'web';
 
+// Maps a real MIME type to a matching file extension for the upload's
+// declared filename (see the matching map + comment in backend/src/index.ts,
+// which is the authoritative side of this fix -- this client-side map just
+// avoids sending an obviously-wrong extension in the first place).
+const MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+};
+
 // Native's fetch polyfill accepts a plain {uri, type, name} object for file
 // uploads, but a real browser's FormData.append requires an actual Blob/File
 // -- a plain object just gets stringified to "[object Object]" and no image
@@ -40,12 +54,21 @@ async function appendImageToFormData(formData: FormData, image: any) {
   if (Platform.OS === 'web') {
     const response = await fetch(image.uri);
     const blob = await response.blob();
-    formData.append('image', blob, 'upload.jpg');
+    // blob.type reflects the picked file's real format (the browser reads
+    // it off the source) -- name the upload to match instead of a hardcoded
+    // "upload.jpg" regardless of what it actually is.
+    const ext = MIME_TO_EXT[blob.type] || 'jpg';
+    formData.append('image', blob, `upload.${ext}`);
   } else {
+    // expo-image-picker's asset carries the real picked file's mime type;
+    // fall back to jpeg only if it's genuinely unknown, rather than always
+    // claiming jpeg regardless of the real format.
+    const mimeType = image.mimeType || 'image/jpeg';
+    const ext = MIME_TO_EXT[mimeType] || 'jpg';
     formData.append('image', {
       uri: image.uri,
-      type: 'image/jpeg',
-      name: 'upload.jpg',
+      type: mimeType,
+      name: `upload.${ext}`,
     } as any);
   }
 }
