@@ -221,12 +221,27 @@ shared `components/SyncStatusBanner.tsx`, shown on Log/Templates/Exercises:
 a queue, or "You're offline — showing the last synced data" when a read
 fell back to cache with nothing queued.
 
-**Fix 2 — full offline write queue.** The single AsyncStorage queue
-(`offline_queue`) now carries eight action kinds, not three: logs'
+**Fix 2 — full offline write queue, native only.** The single AsyncStorage
+queue (`offline_queue`) now carries eight action kinds, not three: logs'
 `create`/`update`/`delete`, `template-create`/`template-update`/`template-delete`,
 and `exercise-create`/`exercise-update` (there's no offline exercise delete
 because the app has no delete-exercise UI/endpoint to begin with — see §5).
-Every entity type follows the same pattern already established for logs:
+Every entity type follows the same pattern already established for logs.
+
+**Web is deliberately excluded from queuing** (`canQueueWritesOffline =
+Platform.OS !== 'web'` in `database/api.ts`, gating every catch block below)
+— added 2026-08-29 after a real incident: a web-uploaded exercise image
+silently queued instead of saving (the browser tab likely had a brief
+network hiccup mid-upload), showed "Success," and was never recoverable —
+the picked image is a `blob:` URL scoped to that one tab, so once the tab
+closed the queued retry could never re-read the file, and more generally
+AsyncStorage-as-browser-localStorage is far less durable than on a phone (a
+closed tab loses it entirely, unlike a backgrounded native app). On web, a
+write that can't reach the network now throws for real instead of queuing —
+restores the pre-offline-sync behavior there, matching what actually makes
+sense for a browser tab vs. a phone in a gym with bad signal. Reads
+(the caching described below) are unaffected and still fall back to cache on
+web too — that part carries no data-loss risk.
 
 - **Read-through caching** — `fetchExercises`, `fetchTemplates`, and
   `fetchLogs` in `database/api.ts` each try the network first; on success
@@ -416,32 +431,76 @@ docker-compose stack on any dev machine.
   several unrelated containers (Plex, *arr apps, Homepage, a separate
   "Homefinity" app, Nginx Proxy Manager, Portainer) — `fitfinity_*` containers
   are only one project among many on this box.
-- **Compose file** lives on an SMB share mounted locally (on the dev Mac) at
-  `/Volumes/Apps/FitFinity`, edited from there and built against the NAS's
-  Docker daemon (`docker compose` for this project is effectively run against
-  `DOCKER_HOST=ssh://fitfinity-nas`, or the share is used as the build context
-  when composing from the NAS side).
+- **Compose file** lives at `/volume1/Apps/FitFinity` on the NAS itself,
+  also reachable from the dev Mac via an SMB share at `/Volumes/Apps/FitFinity`
+  when mounted (Finder → Cmd+K) — but that mount is **not persistent**
+  (nothing auto-mounts it), so don't assume it's there; a plain `ssh
+  fitfinity-nas` session reaching the same path directly is more reliable and
+  is what the transfer method below uses instead.
+- **`frontend/Dockerfile` and `frontend/nginx.conf` exist ONLY on the
+  NAS** (`/volume1/Apps/FitFinity/frontend/`) — they are not tracked in this
+  git repo and not present in the local dev tree, unlike the local
+  docker-compose setup which runs the frontend directly via `node:20-slim` +
+  `expo start --web` with no Dockerfile at all (see §13). **Any file-sync
+  step that replaces the whole `frontend/` directory on the NAS will delete
+  these two files** — copy them back from the previous version (or keep a
+  backup dir around) before rebuilding, or the frontend image build will fail
+  outright with a missing-Dockerfile error.
 - **docker-compose.yml differs from the dev-machine one**: ports are
-  `5011:5001` (backend) and `8082:80` (frontend, served as a static build
-  behind its own Dockerfile, not `expo start --web`); Postgres has no exposed
-  host port; the backend `command` still runs `prisma migrate deploy && npm
-  run seed && npm start` on container start, but schema changes
-  (`prisma db push`) are applied manually and deliberately **not** automated.
-  Something in front (Nginx Proxy Manager, presumably) reverse-proxies
-  `ff.sl8er.net` to the frontend/backend ports.
+  `5011:5001` (backend) and `8082:80` (frontend, a two-stage build — `expo
+  export --platform web` then served statically by `nginx:1.27-alpine`, not
+  `expo start --web`); Postgres has no exposed host port; the backend
+  `command` still runs `prisma migrate deploy && npm run seed && npm start`
+  on container start, but schema changes (`prisma db push`) are applied
+  manually and deliberately **not** automated. Nginx Proxy Manager
+  reverse-proxies `ff.sl8er.net` to the frontend/backend ports.
 - **Both backend and frontend images are built via `COPY . .` in their
   Dockerfiles — not bind-mounted.** A plain `docker restart`/`docker compose
   restart` on the NAS reuses the already-built image and will **not** pick up
   new source files (including new seed scripts or code changes). To ship a
   change there:
-  1. `rsync` the changed directory (e.g. `backend/`) to `/Volumes/Apps/FitFinity/<dir>/`.
-  2. Either rebuild+recreate the affected service (`docker compose up -d --build <service>`,
-     run on/against the NAS), or, for something idempotent and low-risk like a
-     seed script, `docker cp` the file directly into the already-running
-     container and `docker exec` it — this applies the change immediately
-     without a rebuild/restart/downtime. From the dev Mac this can be done
-     without an interactive SSH session via
-     `DOCKER_HOST=ssh://fitfinity-nas docker cp/exec ...`.
+  1. **Transfer changed files with `tar` piped over `ssh`, not `rsync`.**
+     Plain single-command SSH execution (`ssh fitfinity-nas "..."`) works
+     fine, but this NAS's SSH login wraps sessions through a UGREEN
+     privilege-check step (`ug_start_server`) that breaks rsync's own
+     remote-shell protocol (`rsync --server ...`) with an `invalid path`
+     error — confirmed 2026-08-29, don't waste time re-diagnosing this if it
+     recurs, just use tar:
+     ```bash
+     cd frontend && tar czf - --exclude node_modules --exclude .expo --exclude .git . \
+       | ssh fitfinity-nas "rm -rf /volume1/Apps/FitFinity/frontend_new && mkdir -p /volume1/Apps/FitFinity/frontend_new \
+         && tar xzf - -C /volume1/Apps/FitFinity/frontend_new"
+     # copy back the NAS-only files the tar above can't include (see bullet above)
+     ssh fitfinity-nas "cp /volume1/Apps/FitFinity/frontend/Dockerfile /volume1/Apps/FitFinity/frontend/nginx.conf /volume1/Apps/FitFinity/frontend_new/"
+     # atomic swap, keeping the old tree as a rollback
+     ssh fitfinity-nas "cd /volume1/Apps/FitFinity && rm -rf frontend_backup && mv frontend frontend_backup && mv frontend_new frontend"
+     ```
+  2. **Clean macOS AppleDouble sidecar files before/after transfer.** The
+     local dev tree lives on a Google-Drive-synced folder; macOS's `tar`
+     silently packs a hidden `._<name>` shadow file alongside every file
+     that carries extended attributes (which Drive-sync sets on nearly
+     everything), and Metro's bundler will try to parse one of these binary
+     files as source and fail with a baffling
+     `SyntaxError: .../.__layout.tsx: Unexpected character` (confirmed
+     2026-08-29 — this is almost certainly also what caused an earlier
+     "transient" bundling error seen during local `docker compose` testing,
+     not a real code bug). Before building, run:
+     `ssh fitfinity-nas "find /volume1/Apps/FitFinity/frontend -name '._*' -delete"`
+  3. Rebuild+recreate the affected service: `docker compose up -d --build
+     <service>` run on the NAS (e.g. `ssh fitfinity-nas "cd
+     /volume1/Apps/FitFinity && docker compose up -d --build frontend"`).
+     **Expect it to also recreate `db` and `backend` even when only
+     `frontend` was targeted** — this compose version seems to recreate the
+     whole dependency graph rather than just the named service; this is
+     harmless (named volumes `postgres_data`/`backend_uploads` aren't
+     touched, so no data loss — confirmed by the idempotent seed script
+     logging "already exists" for all rows after a recreate) but don't be
+     alarmed by it. If the build fails partway through, the previously
+     running containers are untouched (compose only recreates on a
+     successful image build), so a failed attempt is safe to retry.
+     For something idempotent and low-risk like a seed script, `docker cp`
+     the file directly into the already-running container and `docker exec`
+     it instead — applies the change immediately with no rebuild/downtime.
 - **Any change made to the local dev docker-compose stack (seed data, schema,
   env vars, etc.) does not exist on the NAS until separately synced and
   applied there.** Always treat "does the live app at ff.sl8er.net reflect

@@ -18,6 +18,18 @@ function isNetworkError(err: any): boolean {
   return err instanceof TypeError;
 }
 
+// The offline write-queue (silently save locally + report success, replay
+// later) is only safe on native: AsyncStorage there is durable app storage
+// that survives backgrounding, matching the "gym with bad signal" scenario
+// it exists for. On web the equivalent storage is one browser tab's local
+// storage -- routinely gone the moment the tab closes -- and an image pick
+// there is a `blob:` URL scoped to that same tab, which can never be
+// re-uploaded once it's gone. Queuing on web means a flaky connection can
+// silently swallow a save (shown as "Success") with no real way to recover
+// it. So on web, a write that can't reach the network throws for real
+// instead of queuing -- matches the pre-offline-sync behavior there.
+const canQueueWritesOffline = Platform.OS !== 'web';
+
 // Native's fetch polyfill accepts a plain {uri, type, name} object for file
 // uploads, but a real browser's FormData.append requires an actual Blob/File
 // -- a plain object just gets stringified to "[object Object]" and no image
@@ -130,7 +142,7 @@ export async function createExercise(data: ExercisePayload) {
   try {
     return await rawCreateExercise(data);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.queueCreateExercise(data);
+    if (canQueueWritesOffline && isNetworkError(err)) return offlineSync.queueCreateExercise(data);
     throw err;
   }
 }
@@ -141,7 +153,7 @@ export async function updateExercise(id: number, data: ExercisePayload) {
   try {
     return await rawUpdateExercise(id, data);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.queueUpdateExercise(id, data);
+    if (canQueueWritesOffline && isNetworkError(err)) return offlineSync.queueUpdateExercise(id, data);
     throw err;
   }
 }
@@ -230,7 +242,7 @@ export async function createTemplate(name: string, description: string, exercise
   try {
     return await rawCreateTemplate(payload);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.queueCreateTemplate(payload);
+    if (canQueueWritesOffline && isNetworkError(err)) return offlineSync.queueCreateTemplate(payload);
     throw err;
   }
 }
@@ -241,7 +253,7 @@ export async function updateTemplate(id: number, name: string, description: stri
   try {
     return await rawUpdateTemplate(id, payload);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.queueUpdateTemplate(id, payload);
+    if (canQueueWritesOffline && isNetworkError(err)) return offlineSync.queueUpdateTemplate(id, payload);
     throw err;
   }
 }
@@ -251,7 +263,7 @@ export async function deleteTemplate(id: number) {
   try {
     return await rawDeleteTemplate(id);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.queueDeleteTemplate(id);
+    if (canQueueWritesOffline && isNetworkError(err)) return offlineSync.queueDeleteTemplate(id);
     throw err;
   }
 }
@@ -340,7 +352,7 @@ export async function createLog(date: string, templateName: string, sentiment: n
   try {
     return await rawCreateLog(date, templateName, sentiment, sets);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.queueCreateLog({ date, templateName, sentiment, sets });
+    if (canQueueWritesOffline && isNetworkError(err)) return offlineSync.queueCreateLog({ date, templateName, sentiment, sets });
     throw err;
   }
 }
@@ -350,7 +362,7 @@ export async function updateLog(id: number, date: string, templateName: string, 
   try {
     return await rawUpdateLog(id, date, templateName, sentiment, sets);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.queueUpdateLog(id, { date, templateName, sentiment, sets });
+    if (canQueueWritesOffline && isNetworkError(err)) return offlineSync.queueUpdateLog(id, { date, templateName, sentiment, sets });
     throw err;
   }
 }
@@ -360,7 +372,7 @@ export async function deleteLog(id: number) {
   try {
     return await rawDeleteLog(id);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.queueDeleteLog(id);
+    if (canQueueWritesOffline && isNetworkError(err)) return offlineSync.queueDeleteLog(id);
     throw err;
   }
 }
