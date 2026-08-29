@@ -32,6 +32,13 @@ The backend container runs `prisma migrate deploy && npm run seed && npm start`
 on every boot — migrations and global-data seeding are idempotent, so this is
 safe to re-run.
 
+A fourth deployable unit isn't in this table: the **native Android app**,
+built separately via EAS (not Docker, not this compose file) and installed
+directly on-device rather than served — see §15. It's easy to forget it
+exists as its own pipeline; a fix isn't "live" for phone users until that
+pipeline runs too, no matter how thoroughly the web/backend side was
+redeployed.
+
 ## 2. Tech Stack
 
 **Frontend** (`frontend/`)
@@ -39,7 +46,7 @@ safe to re-run.
 - `react-native-calendars`, `react-native-gifted-charts` (LineChart/BarChart), `react-native-svg`
 - `lucide-react-native` for icons
 - `expo-secure-store` for token storage on native; `localStorage` on web
-- `expo-image-picker` for exercise photo uploads
+- `expo-image-picker` for picking exercise photos; `expo-image` for rendering them (and all other exercise/template pictures — see §10, native GIF/WebP/AVIF decode support the plain `react-native` `Image` component lacks on Android)
 - `@react-native-async-storage/async-storage` + `@react-native-community/netinfo` for the offline cache/sync queue (see §8)
 - `zustand` is a dependency but not currently used anywhere (no store defined) — state is handled via React Context instead
 - TypeScript throughout
@@ -544,3 +551,68 @@ docker-compose stack on any dev machine.
   applied there.** Always treat "does the live app at ff.sl8er.net reflect
   this?" as a distinct question from "does `docker compose up` locally
   reflect this?".
+- **A "Network Request Failed" report from a phone on the same home WiFi as
+  the NAS is not necessarily an app bug.** Seen twice in the wild
+  (2026-08-29): once traced to a stale Android build whose baked-in API URL
+  predated pointing at `ff.sl8er.net` (see §15 — a rebuild fixed it); once
+  traced to the phone's own DNS resolution misbehaving on that network
+  specifically (confirmed by the same login succeeding immediately over
+  cellular data with no app/server change at all — a device/network
+  settings issue, not something fixable from this codebase or the NAS
+  config). When this comes up, check in this order: (1) is the backend
+  actually reachable from *outside* the NAS's LAN right now (`curl
+  https://ff.sl8er.net/api/...` from any other machine) — if yes, the
+  server's fine and the problem is specific to that device/network; (2) has
+  the Android app been rebuilt since `eas.json`'s `EXPO_PUBLIC_API_URL` was
+  last correct (see §15); (3) ask the reporter to retry on cellular data —
+  if that works, it's a home-network/device DNS issue, not this app.
+
+## 15. Android App Distribution (EAS Build)
+
+The web deployment (§14) and the native Android app are two **entirely
+separate delivery pipelines** — updating one does not touch the other.
+Critically: **a pure-JS/TypeScript change reaches Android users only after a
+fresh build is installed; it does not auto-update.** This project has no
+`expo-updates`/OTA mechanism configured, so unlike the web frontend (which
+serves whatever JS is currently on the server on every page load), a native
+build's JS is compiled into the APK at `eas build` time and frozen there.
+Forgetting this was the source of real confusion this session — the sync
+fixes, the calendar fix, and the image-upload fixes were all live on the web
+long before an Android rebuild made them reach the phone.
+
+- **`eas.json`** defines three build profiles (`development`, `preview`,
+  `production`), all currently setting the same
+  `EXPO_PUBLIC_API_URL: https://ff.sl8er.net/api` — i.e. every profile
+  points at production; there's no profile that builds against a local dev
+  backend (see §13's native-dev note for that case, which bypasses `eas
+  build` entirely via `npx expo start`).
+- **`preview`** is the profile actually used for distributing a real,
+  installable build to the phone: `buildType: apk`, `distribution:
+  internal`. Build it with:
+  ```bash
+  cd frontend && npx eas-cli build --platform android --profile preview --non-interactive
+  ```
+  This runs on Expo's cloud build servers (not locally) and takes roughly
+  10–15 minutes; `eas-cli` on the dev Mac is already authenticated as
+  `adam@sl8er.net` (account `nfinitys-organization`), so no login step is
+  needed. The command's final output is a `https://expo.dev/accounts/.../builds/<uuid>`
+  link — open that link (or its QR code) directly on the Android device to
+  download and install the APK, replacing whatever was there before.
+- **When a rebuild is actually required** — any change to a **native
+  module** (a new/changed entry under `dependencies` in `package.json` that
+  isn't pure JS, e.g. `expo-image`, `@react-native-async-storage/async-storage`,
+  `@react-native-community/netinfo`) needs a fresh build; it cannot take
+  effect by editing source alone. A change confined to `.ts`/`.tsx` files
+  using already-installed native modules does **not** strictly require a
+  rebuild for *correctness* on native, but since there is no OTA mechanism,
+  it still won't reach an already-installed phone until the next rebuild —
+  in practice, ship an Android rebuild alongside any fix the phone needs to
+  actually see, even a pure-JS one.
+- **The web deploy (§14) is not a substitute for this and vice versa** — a
+  fix needs both a NAS redeploy (for `ff.sl8er.net`) and a fresh EAS build +
+  reinstall (for the phone) to be live everywhere. This session shipped
+  several fixes where only the web side was initially redeployed, which
+  produced confusing "it works on the website but not the phone" reports
+  that were really just "the phone hasn't gotten the update yet," not a
+  platform-specific bug — always double check this distinction before
+  chasing what looks like an Android-only issue.
