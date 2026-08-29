@@ -45,14 +45,38 @@ export async function fetchExercises() {
     if (!response.ok) throw new Error('Failed to fetch exercises');
     const data = await response.json();
     await offlineSync.cacheExercises(data);
-    return data;
+    offlineSync.setOnline();
+    return offlineSync.getMergedExercises(data);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.getCachedExercises();
+    if (isNetworkError(err)) {
+      offlineSync.setOffline();
+      return offlineSync.getMergedExercises(await offlineSync.getCachedExercises());
+    }
     throw err;
   }
 }
 
-export async function createExercise(data: { name: string, categories?: string[], description?: string, isGlobal?: boolean, imageUrl?: string, image?: any }) {
+type ExercisePayload = { name: string, categories?: string[], description?: string, isGlobal?: boolean, imageUrl?: string, image?: any };
+
+// A pending exercise (not yet synced) previews with its local device image
+// uri in place of `imageUrl` (see offlineSync's exerciseFromPayload) so the
+// UI has something to render. If that same exercise is edited again before
+// it syncs, the editor round-trips that local uri back through `imageUrl`
+// unchanged -- which would otherwise get sent to the server as if it were a
+// pasted external URL, corrupting the record. Detect that case and route it
+// through `image` (a real re-upload) instead.
+function isLocalDeviceUri(uri: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(uri) && !/^https?:/i.test(uri);
+}
+
+function normalizeExercisePayload(data: ExercisePayload): ExercisePayload {
+  if (!data.image && data.imageUrl && isLocalDeviceUri(data.imageUrl)) {
+    return { ...data, image: { uri: data.imageUrl }, imageUrl: '' };
+  }
+  return data;
+}
+
+async function rawCreateExercise(data: ExercisePayload) {
   const formData = new FormData();
   formData.append('name', data.name);
   formData.append('categories', JSON.stringify(data.categories || []));
@@ -74,7 +98,7 @@ export async function createExercise(data: { name: string, categories?: string[]
   return response.json();
 }
 
-export async function updateExercise(id: number, data: { name: string, categories?: string[], description?: string, isGlobal?: boolean, imageUrl?: string, image?: any }) {
+async function rawUpdateExercise(id: number, data: ExercisePayload) {
   const formData = new FormData();
   formData.append('name', data.name);
   formData.append('categories', JSON.stringify(data.categories || []));
@@ -96,6 +120,32 @@ export async function updateExercise(id: number, data: { name: string, categorie
   return response.json();
 }
 
+// createExercise/updateExercise are the offline-aware versions every screen
+// calls: if the network is unreachable, the action (including a locally
+// picked image, re-uploaded from its device file uri) is queued instead of
+// throwing, and gets replayed once connectivity returns -- same pattern as
+// createLog/updateLog below.
+export async function createExercise(data: ExercisePayload) {
+  data = normalizeExercisePayload(data);
+  try {
+    return await rawCreateExercise(data);
+  } catch (err) {
+    if (isNetworkError(err)) return offlineSync.queueCreateExercise(data);
+    throw err;
+  }
+}
+
+export async function updateExercise(id: number, data: ExercisePayload) {
+  data = normalizeExercisePayload(data);
+  if (id < 0) return offlineSync.queueUpdateExercise(id, data);
+  try {
+    return await rawUpdateExercise(id, data);
+  } catch (err) {
+    if (isNetworkError(err)) return offlineSync.queueUpdateExercise(id, data);
+    throw err;
+  }
+}
+
 export async function fetchTemplates() {
   try {
     const headers = await getHeaders();
@@ -103,14 +153,25 @@ export async function fetchTemplates() {
     if (!response.ok) throw new Error('Failed to fetch templates');
     const data = await response.json();
     await offlineSync.cacheTemplates(data);
-    return data;
+    offlineSync.setOnline();
+    return offlineSync.getMergedTemplates(data);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.getCachedTemplates();
+    if (isNetworkError(err)) {
+      offlineSync.setOffline();
+      return offlineSync.getMergedTemplates(await offlineSync.getCachedTemplates());
+    }
     throw err;
   }
 }
 
 export async function fetchTemplate(id: number) {
+  // Negative ids only ever exist locally (see offlineSync) -- never hit the network for them.
+  if (id < 0) {
+    const merged = await offlineSync.getMergedTemplates(await offlineSync.getCachedTemplates());
+    const match = merged.find((t: any) => t.id === id);
+    if (match) return match;
+    throw new Error('Template not found locally');
+  }
   try {
     const headers = await getHeaders();
     const response = await fetch(`${API_BASE_URL}/templates/${id}`, { headers });
@@ -118,37 +179,39 @@ export async function fetchTemplate(id: number) {
     return response.json();
   } catch (err) {
     if (isNetworkError(err)) {
-      const cached = await offlineSync.getCachedTemplates();
-      const match = cached.find((t: any) => t.id === id);
+      const merged = await offlineSync.getMergedTemplates(await offlineSync.getCachedTemplates());
+      const match = merged.find((t: any) => t.id === id);
       if (match) return match;
     }
     throw err;
   }
 }
 
-export async function createTemplate(name: string, description: string, exercises: any[], isGlobal?: boolean) {
+type TemplateExercisePayload = { name: string, sets: number, repsString: string, weight: number };
+
+async function rawCreateTemplate(payload: { name: string, description: string, exercises: TemplateExercisePayload[], isGlobal?: boolean }) {
   const headers = await getHeaders();
   const response = await fetch(`${API_BASE_URL}/templates`, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, description, exercises, isGlobal })
+    body: JSON.stringify(payload)
   });
   if (!response.ok) throw new Error('Failed to create template');
   return response.json();
 }
 
-export async function updateTemplate(id: number, name: string, description: string, exercises: any[], isGlobal?: boolean) {
+async function rawUpdateTemplate(id: number, payload: { name: string, description: string, exercises: TemplateExercisePayload[], isGlobal?: boolean }) {
   const headers = await getHeaders();
   const response = await fetch(`${API_BASE_URL}/templates/${id}`, {
     method: 'PUT',
     headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, description, exercises, isGlobal })
+    body: JSON.stringify(payload)
   });
   if (!response.ok) throw new Error('Failed to update template');
   return response.json();
 }
 
-export async function deleteTemplate(id: number) {
+async function rawDeleteTemplate(id: number) {
   const headers = await getHeaders();
   const response = await fetch(`${API_BASE_URL}/templates/${id}`, {
     method: 'DELETE',
@@ -158,6 +221,41 @@ export async function deleteTemplate(id: number) {
   return response.json();
 }
 
+// createTemplate/updateTemplate/deleteTemplate are the offline-aware
+// versions every screen calls -- same queue-on-network-failure pattern as
+// createLog/updateLog/deleteLog below. A template created or edited offline
+// gets a negative id (or mutates its still-queued create) exactly like logs.
+export async function createTemplate(name: string, description: string, exercises: TemplateExercisePayload[], isGlobal?: boolean) {
+  const payload = { name, description, exercises, isGlobal };
+  try {
+    return await rawCreateTemplate(payload);
+  } catch (err) {
+    if (isNetworkError(err)) return offlineSync.queueCreateTemplate(payload);
+    throw err;
+  }
+}
+
+export async function updateTemplate(id: number, name: string, description: string, exercises: TemplateExercisePayload[], isGlobal?: boolean) {
+  const payload = { name, description, exercises, isGlobal };
+  if (id < 0) return offlineSync.queueUpdateTemplate(id, payload);
+  try {
+    return await rawUpdateTemplate(id, payload);
+  } catch (err) {
+    if (isNetworkError(err)) return offlineSync.queueUpdateTemplate(id, payload);
+    throw err;
+  }
+}
+
+export async function deleteTemplate(id: number) {
+  if (id < 0) return offlineSync.queueDeleteTemplate(id);
+  try {
+    return await rawDeleteTemplate(id);
+  } catch (err) {
+    if (isNetworkError(err)) return offlineSync.queueDeleteTemplate(id);
+    throw err;
+  }
+}
+
 export async function fetchLogs() {
   try {
     const headers = await getHeaders();
@@ -165,9 +263,13 @@ export async function fetchLogs() {
     if (!response.ok) throw new Error('Failed to fetch logs');
     const data = await response.json();
     await offlineSync.cacheLogs(data);
+    offlineSync.setOnline();
     return offlineSync.getMergedLogs(data);
   } catch (err) {
-    if (isNetworkError(err)) return offlineSync.getMergedLogs(await offlineSync.getCachedLogs());
+    if (isNetworkError(err)) {
+      offlineSync.setOffline();
+      return offlineSync.getMergedLogs(await offlineSync.getCachedLogs());
+    }
     throw err;
   }
 }
@@ -263,16 +365,37 @@ export async function deleteLog(id: number) {
   }
 }
 
-// Attempts to replay any queued offline log actions now; returns how many
-// synced vs. are still pending (e.g. because the network dropped again
-// mid-sync). Safe to call anytime, including while already online with an
-// empty queue.
+// The full set of raw (network-only) mutators the sync queue replays
+// against once connectivity returns -- covers logs, templates, and
+// exercises so a single queue/"Sync Now" covers every part of the app.
+const rawSyncApi = {
+  createLog: rawCreateLog,
+  updateLog: rawUpdateLog,
+  deleteLog: rawDeleteLog,
+  createTemplate: rawCreateTemplate,
+  updateTemplate: rawUpdateTemplate,
+  deleteTemplate: rawDeleteTemplate,
+  createExercise: rawCreateExercise,
+  updateExercise: rawUpdateExercise,
+};
+
+// Attempts to replay any queued offline actions (logs, templates,
+// exercises) now; returns how many synced vs. are still pending (e.g.
+// because the network dropped again mid-sync). Safe to call anytime,
+// including while already online with an empty queue.
 export async function syncNow() {
-  return offlineSync.flushQueue({ createLog: rawCreateLog, updateLog: rawUpdateLog, deleteLog: rawDeleteLog });
+  return offlineSync.flushQueue(rawSyncApi);
 }
 
 export async function getPendingSyncCount() {
   return offlineSync.getPendingCount();
+}
+
+// Whether the most recent read fell back to cached data because the network
+// was unreachable -- lets screens show "you're offline" even with nothing
+// queued to sync.
+export function getIsOffline() {
+  return offlineSync.getIsOffline();
 }
 
 export function subscribeSyncStatus(listener: () => void) {
@@ -282,7 +405,7 @@ export function subscribeSyncStatus(listener: () => void) {
 // Watches for the device coming back online and auto-syncs the offline
 // queue. Call once, near app startup (see app/_layout.tsx).
 export function startOfflineSync() {
-  return offlineSync.startConnectivityWatcher({ createLog: rawCreateLog, updateLog: rawUpdateLog, deleteLog: rawDeleteLog });
+  return offlineSync.startConnectivityWatcher(rawSyncApi);
 }
 
 export async function login(username: string, password: string) {

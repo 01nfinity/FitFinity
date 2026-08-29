@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../constants/Colors';
 import { Calendar } from 'react-native-calendars';
-import { useIsFocused } from '@react-navigation/native';
 import { ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { fetchLogs } from '../../database/api';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 
 type LogSet = { exerciseName: string; weight: number | null; reps: number | null; completed: boolean };
 
@@ -28,14 +28,13 @@ type WorkoutLog = {
 export default function CalendarScreen() {
   const { isDark } = useTheme();
   const theme = isDark ? Colors.dark : Colors.light;
-  const isFocused = useIsFocused();
 
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [allLogs, setAllLogs] = useState<Log[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadLogs = async () => {
-    setLoading(true);
     try {
       const logs: Log[] = await fetchLogs();
       setAllLogs(logs);
@@ -43,26 +42,40 @@ export default function CalendarScreen() {
       console.error('Failed to load workout history:', err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  useEffect(() => {
-    if (isFocused) {
-      loadLogs();
-    }
-  }, [isFocused]);
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadLogs();
+  };
 
-  // Dates with a logged workout, marked with a dot; the selected day's
-  // highlight is merged in on every render so tapping a day doesn't need a refetch.
+  useAutoRefresh(loadLogs);
+
+  // Dates with a logged workout get a filled accent circle behind the day
+  // number (via markingType="custom" below) -- a small dot below the number
+  // was too easy to miss; a full circle reads at a glance, the same way the
+  // selected-day highlight already does. The selected day's highlight is
+  // merged in on every render so tapping a day doesn't need a refetch; it's
+  // built without a custom `container` style so the library's own
+  // selected-day circle (selectedColor) always wins over the workout-day
+  // circle when a day is both -- only the text style is layered on top so
+  // it stays legible against whichever circle is showing.
+  const workoutDates = new Set(allLogs.map(log => log.date.split(' ')[0]));
   const markedDates: Record<string, any> = {};
-  allLogs.forEach(log => {
-    const datePart = log.date.split(' ')[0];
-    markedDates[datePart] = { marked: true, dotColor: theme.accent };
+  workoutDates.forEach(dateStr => {
+    markedDates[dateStr] = {
+      customStyles: {
+        container: { backgroundColor: theme.accent, borderRadius: 16 },
+        text: { color: '#ffffff', fontWeight: '700' },
+      },
+    };
   });
   markedDates[selectedDate] = {
-    ...markedDates[selectedDate],
     selected: true,
     selectedColor: theme.tint,
+    customStyles: { text: { color: '#ffffff', fontWeight: '700' } },
   };
 
   const dayWorkouts: WorkoutLog[] = allLogs
@@ -83,7 +96,11 @@ export default function CalendarScreen() {
     });
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: theme.background }]} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={[styles.container, { backgroundColor: theme.background }]}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={theme.tint} />}
+    >
       <Text style={[styles.title, { color: theme.text }]}>Workout History</Text>
 
       <View style={[styles.calendarContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
@@ -97,6 +114,7 @@ export default function CalendarScreen() {
           current={selectedDate}
           onDayPress={(day: any) => setSelectedDate(day.dateString)}
           markedDates={markedDates}
+          markingType="custom"
           renderArrow={(direction: 'left' | 'right') =>
             direction === 'left'
               ? <ChevronLeft color={theme.text} size={28} />
@@ -116,8 +134,6 @@ export default function CalendarScreen() {
             // fell back to the library's hardcoded default (#d9e1e8), which has
             // ~1.2:1 contrast against the light-mode surface (essentially invisible).
             textInactiveColor: theme.tabIconDefault,
-            dotColor: theme.accent,
-            selectedDotColor: '#ffffff',
             arrowColor: theme.text,
             monthTextColor: theme.text,
             textDayFontWeight: '500',

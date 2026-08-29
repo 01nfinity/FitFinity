@@ -7,12 +7,8 @@ import { Colors } from '../constants/Colors';
 import * as ImagePicker from 'expo-image-picker';
 import { X, Plus } from 'lucide-react-native';
 import { createExercise, updateExercise, fetchExercises } from '../database/api';
-import { getExerciseLibraryImage } from '../utils/imageMapper';
+import { getExerciseLibraryImage, resolveMediaUrl } from '../utils/imageMapper';
 import { showAlert } from '../utils/alert';
-
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5001/api';
-// Uploaded images are served from the API host at /uploads, not under /api itself.
-const MEDIA_BASE_URL = API_BASE_URL.replace(/\/api\/?$/, '');
 
 export default function ExerciseEditorScreen() {
   const params = useLocalSearchParams();
@@ -35,9 +31,7 @@ export default function ExerciseEditorScreen() {
   const [image, setImage] = useState<any>(null);
   const [saving, setSaving] = useState(false);
 
-  const existingImagePreviewUri = imageUrl
-    ? (imageUrl.startsWith('http') ? imageUrl : `${MEDIA_BASE_URL}${imageUrl}`)
-    : null;
+  const existingImagePreviewUri = imageUrl ? resolveMediaUrl(imageUrl) : null;
 
   useEffect(() => {
     fetchExercises()

@@ -1,16 +1,13 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Image, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, Image, TextInput, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../constants/Colors';
-import { fetchExercises } from '../../database/api';
+import { fetchExercises, getPendingSyncCount, subscribeSyncStatus, syncNow, getIsOffline } from '../../database/api';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
-import { Plus } from 'lucide-react-native';
-import { getExerciseLibraryImage } from '../../utils/imageMapper';
-
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5001/api';
-// Uploaded images are served from the API host at /uploads, not under /api itself.
-const MEDIA_BASE_URL = API_BASE_URL.replace(/\/api\/?$/, '');
+import { Plus, CloudOff } from 'lucide-react-native';
+import { getExerciseLibraryImage, resolveMediaUrl } from '../../utils/imageMapper';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh';
+import { SyncStatusBanner } from '../../components/SyncStatusBanner';
 
 export default function ExercisesScreen() {
   const { isDark } = useTheme();
@@ -18,24 +15,50 @@ export default function ExercisesScreen() {
   const router = useRouter();
   const [exercises, setExercises] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [pendingCount, setPendingCount] = useState(0);
+  const [isOffline, setIsOffline] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const loadExercises = async () => {
     try {
       const data = await fetchExercises();
       setExercises(data);
+      setIsOffline(getIsOffline());
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  useFocusEffect(
-    useCallback(() => {
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadExercises();
+  };
+
+  const handleSyncNow = async () => {
+    setSyncing(true);
+    try {
+      await syncNow();
       loadExercises();
-    }, [])
-  );
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  useAutoRefresh(loadExercises);
+
+  useEffect(() => {
+    getPendingSyncCount().then(setPendingCount);
+    return subscribeSyncStatus(() => {
+      getPendingSyncCount().then(setPendingCount);
+      setIsOffline(getIsOffline());
+      loadExercises();
+    });
+  }, []);
 
   const filteredExercises = exercises.filter(item => {
     const query = searchQuery.toLowerCase();
@@ -56,6 +79,14 @@ export default function ExercisesScreen() {
         </TouchableOpacity>
       </View>
 
+      <SyncStatusBanner
+        theme={theme}
+        pendingCount={pendingCount}
+        isOffline={isOffline}
+        syncing={syncing}
+        onSyncNow={handleSyncNow}
+      />
+
       <TextInput
         style={[styles.searchInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.surface }]}
         placeholder="Search exercises..."
@@ -73,15 +104,16 @@ export default function ExercisesScreen() {
           data={filteredExercises}
           keyExtractor={item => item.id.toString()}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={theme.primary} />}
           renderItem={({ item }) => (
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}
               onPress={() => router.push(`/exercise-editor?id=${item.id}&name=${encodeURIComponent(item.name)}&description=${encodeURIComponent(item.description || '')}&isGlobal=${item.isGlobal}&categories=${encodeURIComponent((item.categories || []).join(','))}&imageUrl=${encodeURIComponent(item.imageUrl || '')}`)}
             >
               {item.imageUrl ? (
                 <View style={[styles.imageContainer, { backgroundColor: theme.border }]}>
                   <Image
-                    source={{ uri: item.imageUrl.startsWith('http') ? item.imageUrl : `${MEDIA_BASE_URL}${item.imageUrl}` }}
+                    source={{ uri: resolveMediaUrl(item.imageUrl) }}
                     style={styles.image}
                     resizeMode="contain"
                   />
@@ -100,7 +132,10 @@ export default function ExercisesScreen() {
                 </View>
               )}
               <View style={styles.textContainer}>
-                <Text style={[styles.name, { color: theme.text }]}>{item.name}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={[styles.name, { color: theme.text }]}>{item.name}</Text>
+                  {item._pendingSync && <CloudOff color={theme.tabIconDefault} size={14} />}
+                </View>
                 {(item.isGlobal || (item.categories || []).length > 0) && (
                   <View style={styles.badgeRow}>
                     {item.isGlobal && (

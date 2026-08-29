@@ -1,15 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 
-// Offline support for workout logging: exercises/templates/logs fetched from
-// the server are cached here so they're still readable with no connection,
-// and log create/update/delete calls that can't reach the server are queued
-// here and replayed in order once connectivity returns.
+// Offline support for logs, templates, and exercises: data fetched from the
+// server is cached here so it's still readable with no connection, and
+// create/update/delete calls that can't reach the server are queued here and
+// replayed in order once connectivity returns.
 //
-// Locally-created (not yet synced) logs get a negative id -- this lets an
-// edit or delete of a log that was itself created offline just mutate/cancel
-// its still-queued 'create' action in place, instead of needing a real
-// server id that doesn't exist yet.
+// Locally-created (not yet synced) rows get a negative id (real server ids
+// are always positive) -- this lets an edit or delete of a row that was
+// itself created offline just mutate/cancel its still-queued 'create' action
+// in place, instead of needing a real server id that doesn't exist yet.
 
 const CACHE_EXERCISES_KEY = 'offline_cache_exercises';
 const CACHE_TEMPLATES_KEY = 'offline_cache_templates';
@@ -19,10 +19,29 @@ const QUEUE_KEY = 'offline_queue';
 export type LogSetPayload = { exerciseName: string; weight: number; reps: number; completed: boolean };
 export type LogPayload = { date: string; templateName: string; sentiment: number; sets: LogSetPayload[] };
 
+export type TemplateExercisePayload = { name: string; sets: number; repsString: string; weight: number };
+export type TemplatePayload = { name: string; description: string; exercises: TemplateExercisePayload[]; isGlobal?: boolean };
+
+export type ExercisePayload = {
+  name: string;
+  categories?: string[];
+  description?: string;
+  isGlobal?: boolean;
+  imageUrl?: string;
+  // A locally-picked-but-not-yet-uploaded image. Only `uri` is used when
+  // rebuilding the upload at sync time.
+  image?: { uri: string } | null;
+};
+
 type QueuedAction =
   | { id: string; type: 'create'; localId: number; payload: LogPayload; createdAt: number }
   | { id: string; type: 'update'; logId: number; payload: LogPayload; createdAt: number }
-  | { id: string; type: 'delete'; logId: number; createdAt: number };
+  | { id: string; type: 'delete'; logId: number; createdAt: number }
+  | { id: string; type: 'template-create'; localId: number; payload: TemplatePayload; createdAt: number }
+  | { id: string; type: 'template-update'; templateId: number; payload: TemplatePayload; createdAt: number }
+  | { id: string; type: 'template-delete'; templateId: number; createdAt: number }
+  | { id: string; type: 'exercise-create'; localId: number; payload: ExercisePayload; createdAt: number }
+  | { id: string; type: 'exercise-update'; exerciseId: number; payload: ExercisePayload; createdAt: number };
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -32,6 +51,28 @@ function notifyListeners() {
 export function subscribe(listener: Listener) {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
+}
+
+// Whether the most recent network-backed fetch failed to reach the server at
+// all (as opposed to the server returning an error). Screens use this to
+// show "you're offline, viewing cached data" even when there's nothing
+// queued to sync. In-memory only -- resets to "online" on every cold start,
+// which is fine since the next fetch re-derives the real state immediately.
+let offline = false;
+export function getIsOffline() {
+  return offline;
+}
+export function setOnline() {
+  if (offline) {
+    offline = false;
+    notifyListeners();
+  }
+}
+export function setOffline() {
+  if (!offline) {
+    offline = true;
+    notifyListeners();
+  }
 }
 
 async function readJson<T>(key: string, fallback: T): Promise<T> {
@@ -103,6 +144,73 @@ export async function getMergedLogs(serverLogs: any[]): Promise<any[]> {
   return merged;
 }
 
+function templateFromPayload(id: number, payload: TemplatePayload) {
+  return {
+    id,
+    name: payload.name,
+    description: payload.description,
+    isGlobal: !!payload.isGlobal,
+    exercises: payload.exercises.map((e, i) => ({
+      id: -(i + 1),
+      exerciseName: e.name,
+      targetSets: e.sets,
+      targetReps: e.repsString,
+      targetWeight: e.weight,
+    })),
+    _pendingSync: true,
+  };
+}
+
+// Same idea as getMergedLogs, for the Templates tab -- queued
+// creates/edits/deletes made offline show up immediately, marked `_pendingSync`.
+export async function getMergedTemplates(serverTemplates: any[]): Promise<any[]> {
+  const queue = await getQueue();
+  let merged = [...serverTemplates];
+
+  for (const action of queue) {
+    if (action.type === 'template-create') {
+      merged = [templateFromPayload(action.localId, action.payload), ...merged];
+    } else if (action.type === 'template-update') {
+      merged = merged.map(t => (t.id === action.templateId ? { ...t, ...templateFromPayload(action.templateId, action.payload) } : t));
+    } else if (action.type === 'template-delete') {
+      merged = merged.filter(t => t.id !== action.templateId);
+    }
+  }
+  return merged;
+}
+
+function exerciseFromPayload(id: number, payload: ExercisePayload, existing?: any) {
+  return {
+    ...(existing || {}),
+    id,
+    name: payload.name,
+    description: payload.description || '',
+    categories: payload.categories || [],
+    isGlobal: !!payload.isGlobal,
+    // A freshly-picked image previews from its local file uri directly; an
+    // explicit imageUrl (including "" to clear it) otherwise wins, falling
+    // back to whatever the row already had.
+    imageUrl: payload.image ? payload.image.uri : (payload.imageUrl !== undefined ? (payload.imageUrl || null) : (existing?.imageUrl ?? null)),
+    _pendingSync: true,
+  };
+}
+
+// Same idea, for the Exercise Library tab. There's no offline delete for
+// exercises since the app has no delete-exercise action to begin with.
+export async function getMergedExercises(serverExercises: any[]): Promise<any[]> {
+  const queue = await getQueue();
+  let merged = [...serverExercises];
+
+  for (const action of queue) {
+    if (action.type === 'exercise-create') {
+      merged = [exerciseFromPayload(action.localId, action.payload), ...merged];
+    } else if (action.type === 'exercise-update') {
+      merged = merged.map(e => (e.id === action.exerciseId ? exerciseFromPayload(action.exerciseId, action.payload, e) : e));
+    }
+  }
+  return merged;
+}
+
 export async function queueCreateLog(payload: LogPayload): Promise<any> {
   const localId = -Date.now();
   const queue = await getQueue();
@@ -149,6 +257,74 @@ export async function queueDeleteLog(logId: number): Promise<void> {
   await setQueue(withoutUpdate);
 }
 
+export async function queueCreateTemplate(payload: TemplatePayload): Promise<any> {
+  const localId = -Date.now();
+  const queue = await getQueue();
+  queue.push({ id: `local-tmpl-${localId}`, type: 'template-create', localId, payload, createdAt: Date.now() });
+  await setQueue(queue);
+  return templateFromPayload(localId, payload);
+}
+
+export async function queueUpdateTemplate(templateId: number, payload: TemplatePayload): Promise<any> {
+  const queue = await getQueue();
+
+  if (templateId < 0) {
+    const idx = queue.findIndex(a => a.type === 'template-create' && a.localId === templateId);
+    if (idx !== -1) {
+      queue[idx] = { ...(queue[idx] as any), payload };
+    }
+  } else {
+    const withoutStale = queue.filter(a => !(a.type === 'template-update' && a.templateId === templateId));
+    withoutStale.push({ id: `tmpl-update-${templateId}-${Date.now()}`, type: 'template-update', templateId, payload, createdAt: Date.now() });
+    await setQueue(withoutStale);
+    return templateFromPayload(templateId, payload);
+  }
+
+  await setQueue(queue);
+  return templateFromPayload(templateId, payload);
+}
+
+export async function queueDeleteTemplate(templateId: number): Promise<void> {
+  const queue = await getQueue();
+
+  if (templateId < 0) {
+    const filtered = queue.filter(a => !(a.type === 'template-create' && a.localId === templateId));
+    await setQueue(filtered);
+    return;
+  }
+
+  const withoutUpdate = queue.filter(a => !(a.type === 'template-update' && a.templateId === templateId));
+  withoutUpdate.push({ id: `tmpl-delete-${templateId}-${Date.now()}`, type: 'template-delete', templateId, createdAt: Date.now() });
+  await setQueue(withoutUpdate);
+}
+
+export async function queueCreateExercise(payload: ExercisePayload): Promise<any> {
+  const localId = -Date.now();
+  const queue = await getQueue();
+  queue.push({ id: `local-ex-${localId}`, type: 'exercise-create', localId, payload, createdAt: Date.now() });
+  await setQueue(queue);
+  return exerciseFromPayload(localId, payload);
+}
+
+export async function queueUpdateExercise(exerciseId: number, payload: ExercisePayload): Promise<any> {
+  const queue = await getQueue();
+
+  if (exerciseId < 0) {
+    const idx = queue.findIndex(a => a.type === 'exercise-create' && a.localId === exerciseId);
+    if (idx !== -1) {
+      queue[idx] = { ...(queue[idx] as any), payload };
+    }
+  } else {
+    const withoutStale = queue.filter(a => !(a.type === 'exercise-update' && a.exerciseId === exerciseId));
+    withoutStale.push({ id: `ex-update-${exerciseId}-${Date.now()}`, type: 'exercise-update', exerciseId, payload, createdAt: Date.now() });
+    await setQueue(withoutStale);
+    return exerciseFromPayload(exerciseId, payload);
+  }
+
+  await setQueue(queue);
+  return exerciseFromPayload(exerciseId, payload);
+}
+
 // --- Sync flush ---
 
 let flushing = false;
@@ -156,13 +332,18 @@ let flushing = false;
 // Injected by database/api.ts to avoid a circular import (api.ts calls into
 // this module for caching/queueing; this module calls back into api.ts's
 // raw network functions to actually replay the queue).
-type RawLogApi = {
+type RawApi = {
   createLog: (date: string, templateName: string, sentiment: number, sets: LogSetPayload[]) => Promise<any>;
   updateLog: (id: number, date: string, templateName: string, sentiment: number, sets: LogSetPayload[]) => Promise<any>;
   deleteLog: (id: number) => Promise<any>;
+  createTemplate: (payload: TemplatePayload) => Promise<any>;
+  updateTemplate: (id: number, payload: TemplatePayload) => Promise<any>;
+  deleteTemplate: (id: number) => Promise<any>;
+  createExercise: (payload: ExercisePayload) => Promise<any>;
+  updateExercise: (id: number, payload: ExercisePayload) => Promise<any>;
 };
 
-export async function flushQueue(rawApi: RawLogApi): Promise<{ synced: number; remaining: number }> {
+export async function flushQueue(rawApi: RawApi): Promise<{ synced: number; remaining: number }> {
   if (flushing) return { synced: 0, remaining: (await getQueue()).length };
   flushing = true;
   let synced = 0;
@@ -179,6 +360,16 @@ export async function flushQueue(rawApi: RawLogApi): Promise<{ synced: number; r
           await rawApi.updateLog(action.logId, action.payload.date, action.payload.templateName, action.payload.sentiment, action.payload.sets);
         } else if (action.type === 'delete') {
           await rawApi.deleteLog(action.logId);
+        } else if (action.type === 'template-create') {
+          await rawApi.createTemplate(action.payload);
+        } else if (action.type === 'template-update') {
+          await rawApi.updateTemplate(action.templateId, action.payload);
+        } else if (action.type === 'template-delete') {
+          await rawApi.deleteTemplate(action.templateId);
+        } else if (action.type === 'exercise-create') {
+          await rawApi.createExercise(action.payload);
+        } else if (action.type === 'exercise-update') {
+          await rawApi.updateExercise(action.exerciseId, action.payload);
         }
         queue = queue.slice(1);
         await setQueue(queue);
@@ -186,11 +377,12 @@ export async function flushQueue(rawApi: RawLogApi): Promise<{ synced: number; r
       } catch (err: any) {
         // A genuine network failure (still offline) -- stop and retry later.
         // A server-side error (e.g. 404 for an update/delete whose target
-        // log no longer exists) shouldn't block the rest of the queue
-        // forever, so drop just that action and keep going.
+        // row no longer exists, or a locally-cached image file that's no
+        // longer on disk) shouldn't block the rest of the queue forever, so
+        // drop just that action and keep going.
         const isNetworkFailure = err?.message === 'Failed to fetch' || err?.name === 'TypeError';
         if (isNetworkFailure) break;
-        console.warn('Dropping queued log action that the server rejected:', action, err);
+        console.warn('Dropping queued sync action that failed:', action, err);
         queue = queue.slice(1);
         await setQueue(queue);
       }
@@ -204,7 +396,7 @@ export async function flushQueue(rawApi: RawLogApi): Promise<{ synced: number; r
 
 // Watches for the device coming back online and flushes the queue
 // automatically. Call once from the root layout.
-export function startConnectivityWatcher(rawApi: RawLogApi) {
+export function startConnectivityWatcher(rawApi: RawApi) {
   let wasOffline = false;
   return NetInfo.addEventListener(state => {
     const isOnline = !!state.isConnected && state.isInternetReachable !== false;

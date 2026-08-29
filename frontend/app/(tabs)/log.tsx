@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Modal, RefreshControl } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../constants/Colors';
-import { useIsFocused } from '@react-navigation/native';
 import { router } from 'expo-router';
-import { Plus, Dumbbell, Trash2, CloudOff, RefreshCw } from 'lucide-react-native';
-import { fetchLogs, deleteLog, getPendingSyncCount, subscribeSyncStatus, syncNow } from '../../database/api';
+import { Plus, Dumbbell, Trash2, CloudOff } from 'lucide-react-native';
+import { fetchLogs, deleteLog, getPendingSyncCount, subscribeSyncStatus, syncNow, getIsOffline } from '../../database/api';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh';
+import { SyncStatusBanner } from '../../components/SyncStatusBanner';
 
 type WorkoutHistoryRow = {
   id: number;
@@ -29,12 +30,13 @@ const SENTIMENTS: Record<string, string> = {
 export default function HistoryTableScreen() {
   const { isDark } = useTheme();
   const theme = isDark ? Colors.dark : Colors.light;
-  const isFocused = useIsFocused();
 
   const [history, setHistory] = useState<WorkoutHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
+  const [isOffline, setIsOffline] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
   const loadHistory = async () => {
@@ -55,15 +57,22 @@ export default function HistoryTableScreen() {
         };
       });
       setHistory(rows);
+      setIsOffline(getIsOffline());
     } catch (err) {
       console.error('Failed to load workout history:', err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   const handleDeleteLog = (id: number, name: string) => {
     setDeleteTarget({ id, name });
+  };
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadHistory();
   };
 
   const handleSyncNow = async () => {
@@ -76,17 +85,13 @@ export default function HistoryTableScreen() {
     }
   };
 
-  useEffect(() => {
-    if (isFocused) {
-      loadHistory();
-      getPendingSyncCount().then(setPendingCount);
-    }
-  }, [isFocused]);
+  useAutoRefresh(loadHistory);
 
   useEffect(() => {
     getPendingSyncCount().then(setPendingCount);
     return subscribeSyncStatus(() => {
       getPendingSyncCount().then(setPendingCount);
+      setIsOffline(getIsOffline());
       loadHistory();
     });
   }, []);
@@ -104,26 +109,13 @@ export default function HistoryTableScreen() {
         </TouchableOpacity>
       </View>
 
-      {pendingCount > 0 && (
-        <TouchableOpacity
-          style={[styles.syncBanner, { backgroundColor: theme.surface, borderColor: theme.border }]}
-          onPress={handleSyncNow}
-          disabled={syncing}
-        >
-          <CloudOff color={theme.tabIconDefault} size={16} />
-          <Text style={[styles.syncBannerText, { color: theme.tabIconDefault }]}>
-            {pendingCount} workout{pendingCount === 1 ? '' : 's'} saved offline, not yet synced
-          </Text>
-          {syncing ? (
-            <ActivityIndicator size="small" color={theme.tint} />
-          ) : (
-            <View style={styles.syncNowRow}>
-              <RefreshCw color={theme.tint} size={14} />
-              <Text style={[styles.syncNowText, { color: theme.tint }]}>Sync Now</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      )}
+      <SyncStatusBanner
+        theme={theme}
+        pendingCount={pendingCount}
+        isOffline={isOffline}
+        syncing={syncing}
+        onSyncNow={handleSyncNow}
+      />
 
       {loading ? (
         <ActivityIndicator size="large" color={theme.tint} style={{ marginTop: 40 }} />
@@ -153,7 +145,10 @@ export default function HistoryTableScreen() {
             </View>
 
             {/* Table Body */}
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={theme.tint} />}
+            >
               {history.map((row) => (
                 <TouchableOpacity 
                   key={row.id} 
@@ -251,18 +246,6 @@ const styles = StyleSheet.create({
   title: { fontSize: 28, fontWeight: '800' },
   newBtn: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, alignItems: 'center' },
   newBtnText: { color: '#fff', fontWeight: 'bold', marginLeft: 4 },
-  syncBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    padding: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 16,
-  },
-  syncBannerText: { flex: 1, fontSize: 12, fontWeight: '600' },
-  syncNowRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  syncNowText: { fontSize: 12, fontWeight: '700' },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 80 },
   emptyText: { fontSize: 16, marginTop: 16, marginBottom: 24 },
   startBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },

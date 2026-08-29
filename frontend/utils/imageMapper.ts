@@ -95,13 +95,22 @@ export function getExerciseGif(exerciseName: string) {
   return null;
 }
 
+// Server-relative paths (e.g. "/uploads/123-x.jpg") need MEDIA_BASE_URL
+// prefixed; anything already absolute -- a pasted external http(s) URL, or a
+// device-local uri (file:/content:/data:/ph:/assets-library:) from an image
+// picked offline and not yet uploaded -- is used as-is.
+const ABSOLUTE_URI_RE = /^[a-z][a-z0-9+.-]*:/i;
+export function resolveMediaUrl(imageUrl: string): string {
+  return ABSOLUTE_URI_RE.test(imageUrl) ? imageUrl : `${MEDIA_BASE_URL}${imageUrl}`;
+}
+
 // Resolves the best available <Image source> for an exercise: an explicit
 // imageUrl from the Exercise Library (uploaded file or pasted URL) takes
 // priority, then a bundled workout gif/webp, then a bundled library photo,
 // otherwise null (caller should render a placeholder, e.g. a Dumbbell icon).
 export function resolveExerciseImageSource(name: string, imageUrl?: string | null) {
   if (imageUrl) {
-    return { uri: imageUrl.startsWith('http') ? imageUrl : `${MEDIA_BASE_URL}${imageUrl}` };
+    return { uri: resolveMediaUrl(imageUrl) };
   }
   return getExerciseGif(name) || getExerciseLibraryImage(name) || null;
 }

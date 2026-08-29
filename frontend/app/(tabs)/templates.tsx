@@ -1,24 +1,29 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Image, ActivityIndicator, TextInput } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Image, ActivityIndicator, TextInput, RefreshControl } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { router } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
-import { Play, Copy, Plus, Dumbbell, Edit, Trash2 } from 'lucide-react-native';
+import { Play, Copy, Plus, Dumbbell, Edit, Trash2, CloudOff } from 'lucide-react-native';
 import { useTheme } from '../../context/ThemeContext';
 import { resolveExerciseImageSource } from '../../utils/imageMapper';
-import { fetchTemplates, createTemplate, deleteTemplate, fetchExercises } from '../../database/api';
+import { fetchTemplates, createTemplate, deleteTemplate, fetchExercises, getPendingSyncCount, subscribeSyncStatus, syncNow, getIsOffline } from '../../database/api';
 import { showAlert, confirmAction } from '../../utils/alert';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh';
+import { SyncStatusBanner } from '../../components/SyncStatusBanner';
 
 type TemplateExercise = { exerciseName: string; targetSets: number; targetReps: string; targetWeight: number };
-type Template = { id: number; name: string; description: string; isGlobal: boolean; exercises: TemplateExercise[] };
+type Template = { id: number; name: string; description: string; isGlobal: boolean; exercises: TemplateExercise[]; _pendingSync?: boolean };
 
 export default function TemplatesScreen() {
   const { isDark } = useTheme();
   const theme = isDark ? Colors.dark : Colors.light;
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [libraryImages, setLibraryImages] = useState<Record<string, string | null>>({});
+  const [pendingCount, setPendingCount] = useState(0);
+  const [isOffline, setIsOffline] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const loadTemplates = async () => {
     try {
@@ -27,18 +32,40 @@ export default function TemplatesScreen() {
       const map: Record<string, string | null> = {};
       (exercisesData || []).forEach((e: any) => { map[e.name.toLowerCase()] = e.imageUrl || null; });
       setLibraryImages(map);
+      setIsOffline(getIsOffline());
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  useFocusEffect(
-    useCallback(() => {
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadTemplates();
+  };
+
+  const handleSyncNow = async () => {
+    setSyncing(true);
+    try {
+      await syncNow();
       loadTemplates();
-    }, [])
-  );
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  useAutoRefresh(loadTemplates);
+
+  useEffect(() => {
+    getPendingSyncCount().then(setPendingCount);
+    return subscribeSyncStatus(() => {
+      getPendingSyncCount().then(setPendingCount);
+      setIsOffline(getIsOffline());
+      loadTemplates();
+    });
+  }, []);
 
   const copyTemplate = async (template: Template) => {
     const newName = `${template.name} (Copy)`;
@@ -91,6 +118,14 @@ export default function TemplatesScreen() {
         </TouchableOpacity>
       </View>
 
+      <SyncStatusBanner
+        theme={theme}
+        pendingCount={pendingCount}
+        isOffline={isOffline}
+        syncing={syncing}
+        onSyncNow={handleSyncNow}
+      />
+
       <TextInput
         style={[styles.searchInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.surface }]}
         placeholder="Search routines or exercises..."
@@ -108,6 +143,7 @@ export default function TemplatesScreen() {
           data={filteredTemplates}
           keyExtractor={item => item.id.toString()}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={theme.tint} />}
           renderItem={({ item }) => (
             <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
               <View style={styles.cardHeader}>
@@ -117,6 +153,7 @@ export default function TemplatesScreen() {
                     {item.isGlobal && (
                       <Text style={[styles.badge, { backgroundColor: theme.tint, color: theme.background }]}>GLOBAL</Text>
                     )}
+                    {item._pendingSync && <CloudOff color={theme.tabIconDefault} size={14} />}
                   </View>
                   {!!item.description && <Text style={[styles.desc, { color: theme.tabIconDefault }]}>{item.description}</Text>}
                 </View>

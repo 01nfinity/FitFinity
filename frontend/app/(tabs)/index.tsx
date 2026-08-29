@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Dimensions, ActivityIndicator } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Dimensions, ActivityIndicator, RefreshControl } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../constants/Colors';
 import { LineChart, BarChart } from 'react-native-gifted-charts';
-import { useIsFocused } from '@react-navigation/native';
 import { fetchLogs } from '../../database/api';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 
 type LogSet = { exerciseName: string; weight: number | null; reps: number | null; completed: boolean };
 type Log = { id: number; date: string; templateName: string | null; sentiment: string | null; sets: LogSet[] };
@@ -12,7 +12,6 @@ type Log = { id: number; date: string; templateName: string | null; sentiment: s
 export default function DashboardScreen() {
   const { isDark } = useTheme();
   const theme = isDark ? Colors.dark : Colors.light;
-  const isFocused = useIsFocused();
 
   const screenWidth = Dimensions.get('window').width - 64;
 
@@ -20,6 +19,7 @@ export default function DashboardScreen() {
   const [weightData, setWeightData] = useState<any[]>([]);
   const [sentimentData, setSentimentData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [repsMax, setRepsMax] = useState<number>(100);
   const [weightMax, setWeightMax] = useState<number>(1000);
@@ -119,14 +119,16 @@ export default function DashboardScreen() {
       console.error('Failed to load stats:', err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  useEffect(() => {
-    if (isFocused) {
-      loadStats();
-    }
-  }, [isFocused]);
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadStats();
+  };
+
+  useAutoRefresh(loadStats);
 
   if (loading) {
     return (
@@ -137,7 +139,11 @@ export default function DashboardScreen() {
   }
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: theme.background }]} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={[styles.container, { backgroundColor: theme.background }]}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={theme.tint} />}
+    >
       <Text style={[styles.title, { color: theme.text }]}>Dashboard</Text>
 
       <View style={styles.statsGrid}>

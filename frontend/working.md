@@ -85,19 +85,23 @@ FitFinity/
     │       ├── exercises.tsx   # "Exercises" library
     │       ├── templates.tsx   # "Templates" routine list
     │       └── admin-users.tsx # "Admin" user management (admins only)
-    ├── components/ChangePasswordModal.tsx  # shared self-service / admin-reset password modal (see §11)
+    ├── components/
+    │   ├── ChangePasswordModal.tsx  # shared self-service / admin-reset password modal (see §11)
+    │   └── SyncStatusBanner.tsx     # shared "N changes saved offline" / "you're offline" banner (see §8)
     ├── context/
     │   ├── AuthContext.tsx     # JWT/session state + route guarding
     │   └── ThemeContext.tsx    # light/dark/system theme
     ├── database/
     │   ├── api.ts              # fetch wrappers for every backend endpoint; offline cache/queue wiring (see §8)
     │   └── db.ts                # LEGACY — pre-migration local SQLite schema (dead code, see §9)
+    ├── hooks/
+    │   └── useAutoRefresh.ts   # refetch on nav focus + on app foreground (see §8)
     ├── services/
     │   ├── offlineSync.ts       # AsyncStorage cache + sync queue backing database/api.ts (see §8)
     │   └── CloudSyncService.ts  # LEGACY — mock Google Drive backup/restore (dead code, see §9)
     ├── utils/
     │   ├── alert.ts             # cross-platform alert/confirm (native Alert vs window.alert/confirm)
-    │   └── imageMapper.ts       # maps exercise names → bundled gif/webp assets
+    │   └── imageMapper.ts       # maps exercise names → bundled gif/webp assets; resolveMediaUrl() (see §8) resolves server-relative vs. absolute/local-device image URIs
     ├── constants/Colors.ts      # light/dark palette
     ├── assets/images.ts         # keyed map of all bundled exercise images
     └── images/                  # ~40 exercise gif/webp/png assets
@@ -182,65 +186,107 @@ alone so deep-linking into e.g. `active-workout` doesn't get bounced.
 - **AuthContext** (`context/AuthContext.tsx`) — holds `token, userId, username, isAdmin`; persists to `expo-secure-store` on native, `localStorage` on web (helper functions branch on `Platform.OS`). Exposes `signIn`/`signOut`.
 - **ThemeContext** (`context/ThemeContext.tsx`) — `light | dark | system`; system mode follows `useColorScheme()`; user override persisted to `localStorage` (web only — native has no persistence for this, it just resets to `system` on relaunch).
 - **`database/api.ts`** — the sole data-access layer; every screen calls these fetch wrappers rather than touching `fetch` directly. Reads the JWT from storage per-request and attaches `Authorization: Bearer`. Image uploads build a `FormData`; on web it re-fetches the picked asset's blob/data URL into a real `Blob` before appending (RN's polyfill object-literal trick doesn't work in real browsers).
-- No client-side app-state store (no Redux/Zustand/React Query) — every screen re-fetches on focus via `useFocusEffect`/`useIsFocused`. There is a persistent offline cache/sync queue for logs/templates/exercises, though — see §8.
+- No client-side app-state store (no Redux/Zustand/React Query) — every list/detail screen re-fetches via `hooks/useAutoRefresh.ts` (on-focus **and** on app-foreground, see §8) plus manual pull-to-refresh. There is a persistent offline cache/sync queue for logs/templates/exercises, though — see §8.
 
-## 8. Offline Support & Sync (`services/offlineSync.ts`)
+## 8. Offline Support & Sync (`services/offlineSync.ts`, `hooks/useAutoRefresh.ts`)
 
-Added 2026-07-05, scoped deliberately to **workout logging**, not full offline
-CRUD everywhere (exercise/template authoring and admin actions still require
-a live connection). The exercise library and templates are cached read-only
-for offline *viewing*; workout logs support full offline create/edit/delete
-via a replay queue. Two native modules back this: `@react-native-async-storage/async-storage`
-(persistent JSON cache/queue) and `@react-native-community/netinfo`
-(connectivity-change detection).
+Added 2026-07-05, originally scoped to workout logging only; extended
+2026-08-29 to cover **every part of the app** (logs, templates, and
+exercises) after a report that templates/exercises edited via the web app
+weren't showing up on mobile. That investigation found two separate issues,
+both now fixed:
 
-**Read-through caching** — `fetchExercises`, `fetchTemplates`, and `fetchLogs`
-in `database/api.ts` each try the network first; on success they write the
-response into an AsyncStorage cache key (`offline_cache_exercises`/`_templates`/`_logs`)
-before returning it; on a genuine network failure (`fetch` throwing a
-`TypeError` — the cross-platform signal for "couldn't reach the network at
-all", as opposed to a reachable server returning an error status) they
-return the last cached copy instead of throwing. `fetchTemplate(id)` and
-`fetchLog(id)` (singular) fall back to finding the row inside the cached
-plural list. This means every screen that already called these functions
-(Log, Calendar/History, Stats/Dashboard, Exercises, Templates, the
-template-editor/active-workout exercise pickers) got offline reads for free,
-with no changes to the screens themselves.
+1. **Root cause of the reported bug**: Templates/Exercises/Log/Calendar/Stats
+   only refetched on React Navigation focus (`useFocusEffect`), which does
+   **not** fire when the OS backgrounds/foregrounds the app without an
+   in-app navigation change — exactly what happens when someone edits data
+   on the web, then switches back to an already-open mobile app sitting on
+   the same tab. There was no server-side caching involved (verified against
+   `ff.sl8er.net` directly) — it was purely a client-side "never re-asked"
+   problem, and it failed silently with no indication the data was stale.
+2. **Design gap**: templates/exercises were cached read-only for offline
+   *viewing*; only workout logs supported full offline create/edit/delete.
 
-**Write queueing** — `createLog`/`updateLog`/`deleteLog` attempt the real
-network call first; on a network-failure they enqueue the action instead of
-throwing, and return a synthetic result so calling code (`active-workout.tsx`)
-can proceed as if it succeeded. A locally-created, not-yet-synced log is
-given a **negative id** (real server ids are always positive) — this is the
-key trick that lets editing or deleting a log that was itself created
-offline just mutate or cancel its still-queued `create` action in place,
-without ever needing a server id that doesn't exist yet. `fetchLog`/`updateLog`/`deleteLog`
-all short-circuit around the network entirely for negative ids.
+**Fix 1 — read freshness.** `hooks/useAutoRefresh.ts` wraps `useFocusEffect`
+with an `AppState` listener: it refetches on in-app tab focus *and* whenever
+the app resumes to `active` while the screen is the currently-focused one.
+Every list/detail screen (Templates, Exercises, Log, Calendar, Stats) uses
+this hook instead of a bare focus effect, and all five also gained
+pull-to-refresh (`RefreshControl`) as a manual fallback. `offlineSync`
+additionally tracks a simple in-memory online/offline flag
+(`setOnline`/`setOffline`/`getIsOffline`), flipped by every fetch* call in
+`database/api.ts`; combined with the pending-queue count this drives a
+shared `components/SyncStatusBanner.tsx`, shown on Log/Templates/Exercises:
+"N changes saved offline, not yet synced" (tap to **Sync Now**) when there's
+a queue, or "You're offline — showing the last synced data" when a read
+fell back to cache with nothing queued.
 
-**The queue** (`offline_queue` in AsyncStorage) is a list of `{create |
-update | delete}` actions. `fetchLogs()` merges it with the last-cached
-server logs (`getMergedLogs`) so a queued log shows up in the Log
-tab/Calendar/Stats immediately, marked `_pendingSync: true` (rendered as a
-small cloud-off icon in the Log tab, plus a dismissable "N workouts saved
-offline" banner with a manual **Sync Now** button).
+**Fix 2 — full offline write queue.** The single AsyncStorage queue
+(`offline_queue`) now carries eight action kinds, not three: logs'
+`create`/`update`/`delete`, `template-create`/`template-update`/`template-delete`,
+and `exercise-create`/`exercise-update` (there's no offline exercise delete
+because the app has no delete-exercise UI/endpoint to begin with — see §5).
+Every entity type follows the same pattern already established for logs:
+
+- **Read-through caching** — `fetchExercises`, `fetchTemplates`, and
+  `fetchLogs` in `database/api.ts` each try the network first; on success
+  they cache the response (`offline_cache_exercises`/`_templates`/`_logs`)
+  and call `setOnline()`; on a genuine network failure (`fetch` throwing a
+  `TypeError` — the cross-platform signal for "couldn't reach the network at
+  all", as opposed to a reachable server returning an error status) they
+  call `setOffline()` and fall back to the cached copy. `fetchTemplate(id)`
+  and `fetchLog(id)` (singular) fall back to the cached plural list for
+  negative ids or on a network error.
+- **Write queueing** — `createTemplate`/`updateTemplate`/`deleteTemplate` and
+  `createExercise`/`updateExercise` attempt the real network call first
+  (multipart, for exercise image uploads); on a network failure they enqueue
+  the action and return a synthetic result, so `template-editor.tsx` and
+  `exercise-editor.tsx` needed **no changes at all** — they already treated
+  a non-throwing save as success, same as `active-workout.tsx` for logs.
+  A locally-created, not-yet-synced template/exercise gets a **negative id**
+  exactly like logs, so editing or deleting it before it syncs just
+  mutates/cancels its still-queued `create` action in place.
+- **Merging** — `getMergedTemplates`/`getMergedExercises` (mirroring
+  `getMergedLogs`) splice queued creates/edits/deletes into the
+  server-fetched list, marked `_pendingSync: true` and shown with a small
+  cloud-off icon on the Templates/Exercises cards.
+- **Offline image uploads** — a locally-picked-but-not-yet-uploaded exercise
+  image is queued as `{ image: { uri } }` (the device's local file uri) and
+  actually re-uploaded via multipart at sync time, reusing the same
+  `appendImageToFormData` path a live upload would take. The merged/pending
+  row previews directly from that local uri. **Known limitation**: this
+  relies on the OS not having reclaimed the picker's cache file before the
+  device reconnects; if that file is gone, the sync attempt fails with a
+  non-network error and is dropped (console warning) rather than retried
+  forever — same "drop rather than block the queue" behavior as a
+  server-rejected action, see below. Because a pending row's `imageUrl` can
+  be a local device uri instead of a server-relative path, every screen that
+  renders exercise images (`imageMapper.ts`'s `resolveExerciseImageSource`,
+  the Exercises tab card, `exercise-editor.tsx`'s preview) resolves through
+  the shared `resolveMediaUrl()` helper, which only prefixes `MEDIA_BASE_URL`
+  onto server-relative paths (`/uploads/...`) and leaves anything already
+  absolute (`http(s)://`, `file:`, `content:`, etc.) untouched.
 
 **Sync trigger** — `startOfflineSync()` (called once from `app/_layout.tsx`)
 watches `NetInfo` for an offline→online transition and calls `syncNow()`
 automatically; `_layout.tsx` also calls `syncNow()` once at app startup as a
-fallback for a queue left over from being closed while offline (a
-transition-based listener alone wouldn't catch that). `syncNow()` replays
-the queue in order against the real endpoints; if an action fails with
-another network error the flush stops and retries next time, but a
-server-rejected action (e.g. updating/deleting a log that's gone for some
-other reason) is dropped with a console warning rather than blocking the
-rest of the queue forever.
+fallback for a queue left over from being closed while offline. `syncNow()`
+replays the single combined queue in creation order against the real
+endpoints (logs/templates/exercises interleaved by when they were queued —
+safe because none of these reference each other by id, only by free-text
+name, per §4); if an action fails with another network error the flush stops
+and retries next time, but a server-rejected/otherwise-broken action (e.g.
+updating a template that's gone, or a since-evicted local image file) is
+dropped with a console warning rather than blocking the rest of the queue
+forever.
 
-**Known limitation**: caches only cover the *last successful* fetch per
+**Known limitations**: caches only cover the *last successful* fetch per
 user/device — a phone that has never been online for a given account has
 nothing to show offline yet (expected: first login always requires
-connectivity). Two devices editing/deleting the same log while both offline
+connectivity). Two devices editing/deleting the same row while both offline
 independently is not reconciled beyond last-write-wins-by-replay-order; this
-wasn't a design goal for the current single-user-per-phone use case.
+wasn't a design goal for the current single-user-per-phone use case. Admin
+actions (user management) still require a live connection.
 
 ## 9. Known Dead Code / Legacy Artifacts
 
@@ -308,7 +354,7 @@ at render time, not by a stored reference.
 - **Build a routine**: Templates tab → New/Edit → `template-editor.tsx` — add exercises from the full Exercise Library picker (searchable, see §9), set target sets/reps/weight per set (reps/weights stored as comma-joined strings to allow per-set targets), reorder with up/down chevrons, optionally mark Global (admin only), Save → `POST/PUT /api/templates`. `getRepList`/`getWeightList` always pad or truncate the reps/weight strings to exactly `target_sets` entries, so the number of rows shown here always matches `target_sets` — the same field `active-workout.tsx` loops over when expanding a template into a workout. (This wasn't always true: `getRepList` used to just split on comma with no padding, so a single-value reps string like `"15"` rendered only 1 row regardless of `target_sets`, silently drifting the two apart if someone clicked "Add Set" to compensate for the missing rows — each click bumped the real `target_sets` further past its intended value while only growing the reps list to match the rows they could see. Fixed 2026-07-05; any template edited under the old code before then may still have a `target_sets` that overshoots its actual intended set count and needs a one-time manual correction.)
 - **Search & delete routines**: Templates tab has a search box filtering by routine name, description, or any contained exercise name (client-side only, no backend search endpoint); each card has Edit/Copy/Delete actions plus Start — Delete asks for confirmation (`confirmAction` from `utils/alert.ts`) then calls `DELETE /api/templates/:id`. As with Edit, the button is shown on every card regardless of ownership; the backend is the actual authority and returns 403 if the caller isn't the owner or an admin managing a global routine.
 - **Run a workout**: Templates tab → Start (or Log tab → New Workout for a blank session) → `active-workout.tsx` loads either a template (`loadTemplate`, expanding target sets into editable rows) or an existing log (`loadWorkoutLog`, for editing history). Tracks completed/weight/reps per set, computes live session totals, captures a date/time and a 1–5 emoji sentiment, and warns on back-navigation with unsaved changes before `POST/PUT /api/logs`.
-- **Review history**: Log tab shows a sortable/scrollable table of all logs with delete support; History (calendar) tab marks every logged date on a month view and shows that day's routine name, sentiment, completed load, and a per-exercise set breakdown when tapped — both tabs read from the same `fetchLogs()` call, just presented differently.
+- **Review history**: Log tab shows a sortable/scrollable table of all logs with delete support; History (calendar) tab marks every logged date on a month view — as a filled `theme.accent` circle behind the day number (`markingType="custom"`, since a plain dot below the number was hard to see; the selected day's `theme.tint` circle always takes visual priority over the workout circle when a date is both) — and shows that day's routine name, sentiment, completed load, and a per-exercise set breakdown when tapped — both tabs read from the same `fetchLogs()` call, just presented differently.
 - **Manage exercise library**: Exercises tab lists global + personal exercises with search-by-name/category; editor supports free-text categories (autocomplete from existing categories), description, image upload/URL, and (admin only) global visibility.
 - **Admin**: Admin tab (visible only to admins) lists all users, lets you toggle admin status (not on yourself), delete users (not yourself), and reset any user's password; backend also enforces these constraints independently.
 - **Change password**: a key icon in the tab header (next to the theme toggle and sign-out, visible to every user regardless of role) opens the same `components/ChangePasswordModal.tsx` used by the Admin page's per-user reset action, but targeting your own id — the one shared UI for both the self-service and admin-resets-anyone cases, since the backend's `PUT /api/users/:id/password` already encodes exactly that authorization split.
